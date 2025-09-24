@@ -1,133 +1,85 @@
-# 💎 에테르넬 (Eternel)
+# ❄️ 에테르넬 (Eternel)
 
-# 에테르넬 | 자연어 질의 기반 추출 아키텍처
-
-[![React](https://img.shields.io/badge/React-18-61DAFB)](https://react.dev/)
-[![TailwindCSS](https://img.shields.io/badge/TailwindCSS-3-38B2AC)](https://tailwindcss.com/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.11x-009688)](https://fastapi.tiangolo.com/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791)](https://www.postgresql.org/)
-[![Python](https://img.shields.io/badge/Python-3.11-3776AB)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-blue)](#)
-
-> 25-2 캡스톤 (PMI 연계) • 목표: **검색 UI → API → 데이터/LLM**까지 끝단 데모와 문서화된 산출물 완성
+> **25-2 캡스톤디자인 | 자연어 질의 기반 추출 아키텍처**  
+> 자연어 검색 → 데이터 추출 → 시각화까지 이어지는 웹 서비스
 
 ---
 
 ## 📌 프로젝트 소개
 
-에테르넬은 **자연어 질의로 패널/메타데이터를 탐색**하고, 결과를 **표/차트/대시보드로 시각화**하는 웹 서비스입니다.  
-검색 → 랭킹(임베딩/필터) → 응답 요약(LLM)까지의 흐름을 최소비용·저지연으로 구현합니다.
+에테르넬은 **자연어 질의 기반 데이터 추출 및 시각화 플랫폼**입니다.  
+사용자는 자연어로 데이터를 검색하고, 결과를 **표·차트·대시보드** 형태로 확인할 수 있습니다.
 
 ---
 
 ## 🧰 기술 스택
 
-### 프론트엔드 (React + Tailwind)
-
-| 구분       | 기술                         |
-| ---------- | ---------------------------- |
-| 언어       | TypeScript                   |
-| 프레임워크 | React 18, Vite               |
-| UI         | TailwindCSS, shadcn/ui       |
-| 차트       | Recharts (또는 Chart.js)     |
-| 상태/요청  | React Query, Zustand/Context |
-| 배포       | Vercel/Netlify(스테이징)     |
-
-### 백엔드 (FastAPI)
-
-| 구분          | 기술                                    |
-| ------------- | --------------------------------------- |
-| 언어          | Python 3.11                             |
-| 프레임워크    | FastAPI, Uvicorn                        |
-| 모델/스키마   | Pydantic                                |
-| 인증/보안     | OAuth2/Bearer, CORS                     |
-| 배포/CI       | AWS(EC2/S3) + GitHub Actions            |
-| 로깅/모니터링 | 구조화 로그(JSON), 건강 체크 엔드포인트 |
-
-### 데이터 & LLM
-
-| 구분          | 기술                                 |
-| ------------- | ------------------------------------ |
-| DB            | PostgreSQL (pgvector 선택적)         |
-| 스키마/마이그 | SQL DDL, Alembic/SQL 파일            |
-| 임베딩        | 사전계산 후 버전관리 (model/dim/ver) |
-| RAG/LLM       | 프롬프트 템플릿, 함수콜(옵션)        |
-| 품질/Eval     | 정확도·환각률·지연 지표 수집         |
+| 영역         | 스택                                                                                                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Frontend** | <img src="https://img.shields.io/badge/React-61DAFB?logo=react&logoColor=white"/> <img src="https://img.shields.io/badge/TailwindCSS-38B2AC?logo=tailwindcss&logoColor=white"/>          |
+| **Backend**  | <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white"/> <img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white"/>                |
+| **Database** | <img src="https://img.shields.io/badge/PostgreSQL-336791?logo=postgresql&logoColor=white"/>                                                                                              |
+| **Infra**    | <img src="https://img.shields.io/badge/AWS-232F3E?logo=amazonaws&logoColor=white"/> <img src="https://img.shields.io/badge/GitHub%20Actions-2088FF?logo=githubactions&logoColor=white"/> |
+| **LLM**      | OpenAI API / 프롬프트 엔지니어링                                                                                                                                                         |
 
 ---
 
-## 👥 팀 역할 (Owners)
+## 👥 팀 역할
 
-| 구성원   | 역할                  | 미션                          | 주요 업무                                                                                      |
-| -------- | --------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------- |
-| **홍근** | PM & 릴리스 매니저    | 일정·범위·품질 총괄           | 로드맵/주간계획, 회의록·브리핑, PR 정책/머지, 문서 규칙, 리스크/이슈, 교수님/대외 커뮤니케이션 |
-| **용주** | 프론트엔드(UI·시각화) | UX 최적화된 검색/대시보드     | 검색/결과표/차트, 반응형·접근성, API 연동, 성능 튜닝, 컴포넌트화                               |
-| **정원** | 데이터 엔지니어       | 신뢰 가능한 데이터 파이프라인 | 스키마/ERD, 전처리, 임베딩 생성·버전, 인덱싱, 품질체크, 샘플셋 제공                            |
-| **민석** | LLM 엔지니어          | 안전·저비용·저지연 LLM        | 프롬프트 템플릿, RAG/툴연동, 키/쿼터, Eval, 비용·지연 모니터링, 가드레일                       |
-| **범창** | 백엔드(FastAPI·배포)  | 안정적 API/운영               | OpenAPI 스펙, DB 액세스, 인증/로그/에러 표준화, AWS 배포(CI/CD), 모니터링                      |
-
-> 부재 시 백업: 데이터 파이프라인 장애는 **범창 1차 → 정원**, API 계약 검토는 **홍근 보조**.
+- **홍근 (팀장)** : 일정 관리, 주간 보고서, GitHub 관리, 발표/브리핑
+- **용주 (프론트엔드)** : React + Tailwind UI 제작, 시각화, UX 최적화
+- **정원 (데이터 엔지니어)** : 데이터 전처리, 스키마 설계, 임베딩, PostgreSQL
+- **민석 (LLM 엔지니어)** : LLM API 연동, 프롬프트 설계, RAG/Eval 관리
+- **범창 (백엔드)** : FastAPI 서버, DB 연동, AWS 배포
 
 ---
 
 ## 🧭 Git 명령어 치트시트
 
-| 명령어                    | 설명                        |
-| ------------------------- | --------------------------- |
-| `git clone <url>`         | 원격 저장소 복제            |
-| `git add .`               | 전체 변경 스테이징          |
-| `git add <파일>`          | 특정 파일 스테이징          |
-| `git commit -m "메시지"`  | 커밋                        |
-| `git log`                 | 히스토리 확인               |
-| `git branch`              | 브랜치 목록 확인            |
-| `git checkout <이름>`     | 해당 브랜치로 이동          |
-| `git checkout -b <이름>`  | 새 브랜치 생성 + 이동       |
-| `git push`                | 현재 브랜치를 원격으로 푸시 |
-| `git pull origin main`    | 원격 `main` 가져오기(병합)  |
-| `git fetch --all --prune` | 원격 참조 최신화(삭제 포함) |
+| 명령어                       | 설명                          |
+| ---------------------------- | ----------------------------- |
+| `git clone <url>`            | 원격 저장소 복제              |
+| `git add .`                  | 전체 변경 스테이징            |
+| `git add <파일>`             | 특정 파일 스테이징            |
+| `git commit -m "메시지"`     | 메시지와 함께 커밋            |
+| `git log`                    | 커밋 히스토리 확인            |
+| `git branch`                 | 브랜치 목록 확인              |
+| `git checkout <브랜치명>`    | 해당 브랜치 이동              |
+| `git checkout -b <브랜치명>` | 새 브랜치 생성 + 이동         |
+| `git push origin <브랜치명>` | 원격 브랜치로 푸시            |
+| `git pull origin main`       | 원격 `main` 가져오기(병합)    |
+| `git fetch --all --prune`    | 원격 브랜치 최신화(삭제 포함) |
 
 ---
 
-## 🌿 Git Flow 브랜치 전략 (with `main`)
+## 🌿 Git 브랜치 전략
 
 ### 기본 브랜치
 
-| 브랜치 | 역할                         |
-| ------ | ---------------------------- |
-| `main` | 최종 배포용(보호 브랜치)     |
-| `dev`  | 다음 배포를 위한 통합 브랜치 |
+| 브랜치      | 역할                                                       |
+| ----------- | ---------------------------------------------------------- |
+| `main`      | **최종 배포 브랜치** (보호됨, 직접 푸시 ❌)                |
+| `dev`       | **개발 통합 브랜치** (모든 기능 브랜치는 여기로 먼저 머지) |
+| `feature/*` | 기능 개발 브랜치                                           |
+| `fix/*`     | 버그 수정 브랜치                                           |
+| `hotfix/*`  | 긴급 수정 (main에서 바로 분기)                             |
 
-### 작업 브랜치 네이밍 규칙
+### 규칙
 
-> `type/#issue번호-짧은-설명` (작업 단위: 기능/수정/리팩토링 등)
-
-| prefix      | 설명                      | 예시                       |
-| ----------- | ------------------------- | -------------------------- |
-| `feat/`     | ✨ 새로운 기능            | `feat/#15-search-endpoint` |
-| `fix/`      | 🐛 버그 수정              | `fix/#42-null-crash`       |
-| `refactor/` | ♻️ 리팩토링               | `refactor/#23-llm-adapter` |
-| `chore/`    | 🧹 설정/잡일              | `chore/#25-ci-cache`       |
-| `perf/`     | ⚡ 성능 개선              | `perf/#94-idx-tuning`      |
-| `hotfix/`   | 🚑 긴급 수정(main서 분기) | `hotfix/#102-cors`         |
-| `test/`     | 🧪 테스트 추가/수정       | `test/#55-search-e2e`      |
-
-### 커밋 컨벤션 (Conventional Commits)
-
-### PR 규칙 (체크리스트)
-
-- [ ] 관련 이슈 링크(예: Close #12)
-- [ ] 변경 요약(스크린샷/JSON 예시)
-- [ ] 테스트 통과 & 린트 OK
-- [ ] `/docs` 스펙/가이드 업데이트
-- [ ] 리뷰 1명 이상 승인
-- [ ] **`main` 머지는 홍근 승인 필수**
+- `main` 은 **되도록 직접 건드리지 않는다** → 반드시 **PR + 리뷰** 필요
+- 모든 브랜치는 **이슈 번호 기반 네이밍** :
+  - 예) `feat/#12-search-api`, `fix/#42-db-connection`
+- 커밋 메시지 컨벤션:
+  - `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, `test:`
+- PR 시 체크리스트:
+  - [ ] 관련 이슈 링크
+  - [ ] 변경 내용 요약
+  - [ ] 스크린샷/예시 포함
+  - [ ] 리뷰어 승인 ✅
 
 ---
 
-| 구성원   | 역할                  | 미션                                  | 주요 업무                                                                                               | 핵심 산출물                                                | 협업 I/F                                                  |
-| -------- | --------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------- |
-| **홍근** | PM & 릴리스 매니저    | 일정·범위·품질 총괄                   | 로드맵/주간계획, 회의록·브리핑, PR 정책/릴리스 컷, 문서 규칙, 리스크/이슈관리, 교수님/기업 커뮤니케이션 | 주간보고서 최종본, 릴리스 노트, 저장소 운영가이드          | 모든 PR 최종 머지권, 외부 커뮤니케이션 단일 창구          |
-| **용주** | 프론트엔드(UI·시각화) | React+Tailwind로 UX 최적화            | 검색창/결과표/차트·대시보드, 상태관리, 반응형·접근성, API 연동, 성능튜닝                                | 컴포넌트 라이브러리, API 연동 훅, 데모/스토리북            | 백엔드와 API 계약(요청/응답/에러) 제안·합의               |
-| **정원** | 데이터 엔지니어       | 신뢰 가능한 데이터 파이프라인         | 스키마/ERD, 전처리, 임베딩 생성·버전, Postgres 운용(migration/인덱스), 데이터 품질 점검                 | 스키마 DDL, 마이그레이션, 임베딩 스크립트/노트북, 샘플셋   | BE/LLM/FE용 샘플 응답·쿼리 가이드 제공                    |
-| **민석** | LLM 엔지니어          | LLM을 안전·저비용·저지연으로 서비스화 | API 키/쿼터, RAG/프롬프트 템플릿, 함수콜/툴연동, 응답 평가(Eval), 비용/지연 모니터링, 가드레일          | 프롬프트 카탈로그, Eval 세트, LLM 어댑터(백엔드 모듈)      | 데이터 임베딩 스펙 합의(차원/모델/버전), BE I/F 정의      |
-| **범창** | 백엔드(FastAPI·배포)  | 안정적인 API·운영 환경                | FastAPI 설계/구현(OpenAPI), DB 액세스 계층, 인증/로그·에러 표준화, AWS 배포(CI/CD), 모니터링            | OpenAPI 스펙, 통합 테스트, 배포 파이프라인(GitHub Actions) | FE에 엔드포인트 문서·예제 응답 제공, LLM/데이터 계층 연결 |
+📢 **Note**
+
+- 상세 규칙(API 계약, ERD, Definition of Done 등)은 `/docs` 디렉토리 참고.
+- `README.md`는 간단 소개용, **풀 매뉴얼은 `README_full.md`** 로 관리.
