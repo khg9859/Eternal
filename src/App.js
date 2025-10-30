@@ -8,6 +8,7 @@ import Logo from './components/Logo';
 import ChatInterface from './components/ChatInterface';
 import DataVisualization from './components/DataVisualization';
 import FilterPanel from './components/FilterPanel';
+import SmartChart from './components/SmartChart';
 
 function App() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -15,6 +16,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [uploadedData, setUploadedData] = useState(null);
   const [showVisualization, setShowVisualization] = useState(false);
+  const [showSmartChart, setShowSmartChart] = useState(true); // 기본적으로 차트 우선 표시
   const [activeFilters, setActiveFilters] = useState({});
   const [interfaceMode, setInterfaceMode] = useState('simple'); // 'simple' or 'chat'
 
@@ -140,6 +142,7 @@ function App() {
     setSearchResults([]);
     setIsLoading(false);
     setShowVisualization(false);
+    setShowSmartChart(true);
     setActiveFilters({});
     setInterfaceMode('simple');
   };
@@ -319,29 +322,52 @@ function App() {
           />
         )}
 
-        {/* 시각화 토글 버튼 */}
-        {searchResults.length > 0 && (
-          <div className="mb-6 flex justify-center">
-            <button
-              onClick={toggleVisualization}
-              className="flex items-center px-6 py-3 bg-gradient-to-r from-google-green to-google-blue text-white rounded-xl hover:from-google-green/90 hover:to-google-blue/90 transition-all duration-200 shadow-lg hover:shadow-xl"
-            >
-              {showVisualization ? '📋 테이블 보기' : '📊 시각화 보기'}
-            </button>
-          </div>
-        )}
-
-        {/* 검색 결과 또는 시각화 */}
-        {searchResults.length > 0 && (
+        {/* 검색 결과 - 스마트 차트 우선 표시 */}
+        {uploadedData && searchQuery && (
           <div className="w-full max-w-5xl">
-            {showVisualization ? (
-              <DataVisualization data={searchResults} query={searchQuery} />
-            ) : (
-              <SearchResults
-                results={searchResults}
+            {/* 표시 모드 선택 */}
+            <div className="mb-6 flex justify-center">
+              <div className="bg-white/80 backdrop-blur-sm rounded-xl p-1 border border-gray-200/50 shadow-lg">
+                <button
+                  onClick={() => setShowSmartChart(true)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${showSmartChart
+                      ? 'bg-gradient-to-r from-google-blue to-google-purple text-white shadow-lg'
+                      : 'text-gray-600 hover:text-gray-800'
+                    }`}
+                >
+                  📊 스마트 차트
+                </button>
+                <button
+                  onClick={() => setShowSmartChart(false)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${!showSmartChart
+                      ? 'bg-gradient-to-r from-google-blue to-google-purple text-white shadow-lg'
+                      : 'text-gray-600 hover:text-gray-800'
+                    }`}
+                >
+                  📋 상세 결과
+                </button>
+              </div>
+            </div>
+
+            {/* 컨텐츠 표시 */}
+            {showSmartChart ? (
+              <SmartChart
                 query={searchQuery}
-                isLoading={isLoading}
+                data={uploadedData}
+                onDataAnalyzed={(result) => {
+                  console.log('차트 분석 완료:', result);
+                }}
               />
+            ) : (
+              <>
+                {searchResults.length > 0 && (
+                  <SearchResults
+                    results={searchResults}
+                    query={searchQuery}
+                    isLoading={isLoading}
+                  />
+                )}
+              </>
             )}
           </div>
         )}
