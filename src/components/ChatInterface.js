@@ -109,9 +109,9 @@ const ChatInterface = ({ onSearch, isLoading, uploadedData }) => {
       {/* 검색 입력창 */}
       <div className="relative">
         <form onSubmit={handleSubmit}>
-          <div className={`flex items-center bg-white/90 backdrop-blur-sm border border-gray-200/50 rounded-2xl shadow-2xl transition-all duration-300 ${!uploadedData ? 'opacity-50' : 'hover:border-google-blue/30'}`}>
+          <div className={`flex items-center bg-gray-900/95 backdrop-blur-sm border border-gray-700/50 rounded-2xl shadow-2xl transition-all duration-300 ${!uploadedData ? 'opacity-50' : 'hover:shadow-purple-500/25 hover:shadow-2xl hover:border-purple-500/50'} ${uploadedData ? 'shadow-purple-500/20' : ''}`}>
             <div className="pl-6 pr-4">
-              <svg className={`w-6 h-6 transition-colors duration-200 ${!uploadedData ? 'text-gray-300' : 'text-google-blue'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-6 h-6 transition-colors duration-200 ${!uploadedData ? 'text-gray-500' : 'text-gray-300'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
             </div>
@@ -125,14 +125,14 @@ const ChatInterface = ({ onSearch, isLoading, uploadedData }) => {
               }}
               placeholder={!uploadedData ? "먼저 데이터 파일을 업로드하세요" : "데이터에 대해 자연어로 질문하세요..."}
               disabled={!uploadedData}
-              className="flex-1 py-4 px-2 text-gray-800 bg-transparent border-none outline-none text-lg placeholder-gray-400 font-light"
+              className="flex-1 py-4 px-2 text-white bg-transparent border-none outline-none text-lg placeholder-gray-400 font-light"
             />
 
             <div className="pr-6">
               <button
                 type="submit"
                 disabled={!uploadedData || !currentQuery.trim()}
-                className="p-2.5 rounded-xl bg-gradient-to-r from-google-blue to-google-purple hover:from-google-blue/90 hover:to-google-purple/90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+                className="p-3 rounded-xl bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-500 hover:to-purple-600 transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed shadow-lg hover:shadow-purple-500/50 hover:shadow-xl"
               >
                 <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
