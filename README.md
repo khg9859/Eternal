@@ -22,8 +22,8 @@ pip install -U python-dotenv
 
 .env파일에서 오픈AI 키는 카톡으로 알려드릴게요.
 
-## 실행 방법 ##
-    # 백엔드 실행#
+## 실행 방법 ## (bash 두개 키고) 
+
 flask --app server run --port=5000 
-    # 프론트 #
+
 npm start
