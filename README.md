@@ -1,94 +1,80 @@
-# 🌌 에테르넬 (Eternel)
+# 📘 데이터 구성 및 실행 가이드
 
-> 2025-2 기업연계 SW 캡스톤디자인 — PMI × 한성대학교  
-> 주제: **자연어 질의 기반 패널 데이터 추출 아키텍처 구성**
+## 📂 데이터 구성 및 테이블 설명
 
----
-
-## 📖 프로젝트 소개
-- 자연어 질의를 통해 대규모 패널 데이터에서 원하는 정보를 효율적으로 추출하는 시스템
-- **데이터 수집 → 가공/저장 → 검색 → LLM 응답 → 시각화** 전 과정을 아우르는 아키텍처 설계
-- 최종 결과물: 웹 기반 검색/조회 서비스 (프론트엔드 + 백엔드 + 데이터 파이프라인)
-
----
-
-## 👥 팀 구성 & 역할
-| 이름   | 역할            | 주요 업무                                                         |
-| ------ | --------------- | ---------------------------------------------------------------- |
-| 팀장   | 기획/관리        | 일정 관리, 대외 커뮤니케이션, 최종 산출물 총괄                   |
-| 홍근   | 부팀장/백엔드    | API 서버, DB 설계, GitHub 운영                                   |
-| ○○○   | 프론트엔드       | UI/UX 설계 및 구현 (React), 데이터 시각화                         |
-| ○○○   | 데이터 담당      | 데이터 가공/정제, 샘플 DB 구축, 스키마 관리                       |
-| ○○○   | LLM 담당         | 모델 프롬프트 설계, API 연동, 검색어 증강                         |
-| ○○○   | 테스트/문서화    | 테스트 코드 작성, 보고서/README/발표자료 정리                    |
+| **데이터 계열** | **구성 테이블** | **설명** |
+|------------------|------------------|-----------|
+| **qpoll 계열** | `metadata`, `respondents`, `answers` | 인구통계 정보(`metadata`) + 응답 내용(`answers`) 모두 존재.<br>`respondents`는 패널 ID(`mb_sn`)와 벡터 저장용으로 사용. |
+| **welcom_1st** | `respondents`, `metadata` | 지역·나이 등 기본 속성만 존재 → 별도의 `answers` 불필요.<br>`respondents`로 식별, `metadata`에 응답 내용 저장.<br>(1st의 응답내용 = `metadata`) |
+| **welcom_2nd** | `respondents`, `answers` | 문항 중심 응답 데이터만 존재 → `metadata` 없이 `answers`로 관리. |
+| **공통 문항 정보** | `codebooks` | 모든 파일의 문항(`Q1~Qn`)과 보기 정보를 통합 관리.<br>`answers`와 `question_id` 기준으로 연결. |
 
 ---
 
-## 🔀 브랜치 전략
-- **main**  
-  - 항상 배포 가능한 상태 유지 (직접 push 금지, PR만 머지 가능)
-- **feature/**  
-  - 새로운 기능 개발 시 사용  
-  - 규칙: `feature/{이슈번호}-{기능명}`  
-  - 예시: `feature/1-login`, `feature/3-search-api`
-- **fix/**  
-  - 버그 수정 브랜치  
-  - 예시: `fix/5-auth-bug`
-- **docs/**  
-  - 문서/README/발표자료 수정
-- **hotfix/**  
-  - 배포 중 긴급 수정
+## 🧱 테이블 구조
+
+| **테이블명** | **컬럼명** | **설명** |
+|---------------|-------------|-----------|
+| `respondents` | `mb_sn`, `profile_vector` | 고유 패널 번호(`mb_sn`), 프로필 벡터(`p_vector`) |
+| `answers` | `answer_id`, `mb_sn`, `question_id`, `answer_value`, `a_vector` | 응답 식별자, 응답자 번호, 코드북 내 문항 번호, 답변값, 답변 임베딩 |
+| `metadata` | `metadata_id`, `mb_sn`, `mobile_carrier`, `gender`, `age`, `region` | 인구통계 메타데이터 (이동통신사, 성별, 연령, 지역 등) |
+| `codebooks` | `codebook_id`, `codebook_data (jsonb)`, `q_vector` | 코드북 파일 ID, 문항 내용(JSON 형식), 문항 임베딩 벡터 |
 
 ---
 
-## 📝 커밋 메시지 규칙
-- 형식: `[타입/#이슈번호] - 작업 내용`
-- 타입 예시:
-  - `feat` : 새로운 기능
-  - `fix`  : 버그 수정
-  - `docs` : 문서 수정
-  - `refactor` : 리팩토링
-  - `chore` : 기타 설정 변경
-- 예시:
-  - `[feat/#1] - 로그인 페이지 추가`
-  - `[fix/#2] - DB 연결 버그 수정`
+## ⚙️ 코드 실행 순서
+
+> ⚠️ *requirements.txt의 모든 파이썬 라이브러리가 이미 설치되어 있다고 가정합니다.*
 
 ---
 
-## ⚙️ 협업 규칙
-1. 모든 작업은 **이슈 생성 → 브랜치 생성 → PR → 리뷰 → 머지** 순서로 진행  
-2. **작업 단위는 작게**: 100~300줄 정도, PR은 자주 올리기  
-3. **코드 리뷰 필수**: 최소 1명 이상 승인 후 머지  
-4. **.env, 민감 데이터 푸시 금지**  
-5. **README/Docs 최신화**: 실행 방법, 데이터 구조, API 변경사항은 항상 기록  
+### 1️⃣ 데이터 파일 준비
+
+#### 🧩 Qpoll 계열
+- 데이터 경로:  ./Data/db_insert/panelData/
+- 필요한 `.xlsx` 파일을 아래 폴더로 복사:./Data/db_insert/execptFile/
+
+
+#### 🧩 Welcom 1st / 2nd 계열
+- 위와 동일하게 실행  
+- 단, **파일 확장자는 `.csv`**  
+- 코드북(`codebook_*.xlsx` 등)이 있다면 함께 복사해야 함  
 
 ---
 
-## 🚀 실행 방법 (예시)
+### 2️⃣ 데이터 삽입 코드 수정
+
+| **파일명** | **수정 항목** |
+|-------------|---------------|
+| `insert_1st.py`, `insert_2nd.py` | 데이터 파일 경로 및 파일명, DB 설정값 |
+| `insert2db2.py` | 실행 경로 기준으로 파일 경로 및 DB 설정값 수정 |
+
+---
+
+### 3️⃣ 데이터 삽입 실행
+
 ```bash
-# 프론트엔드
-cd frontend
-npm install
-npm run dev
+python ./Data/db_insert/insert_all.py
 
-# 백엔드 (FastAPI)
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
+4️⃣ 임베딩 실행
+python ./embedding/embedding.py
+python ./embedding/profileVector.py
 
-<div align=center><h1>📚 STACKS</h1></div>
+5️⃣ PostgreSQL 검수
 
-<div align=center> 
-    <img src="https://img.shields.io/badge/Postgresql-색상?style=for-the-badge&logo=Postgresql&logoColor=white">
-  <img src="https://img.shields.io/badge/FastAPI-007396?style=for-the-badge&logo=FastAPI&logoColor=white">
-  <img src="https://img.shields.io/badge/claude-E34F26?style=for-the-badge&logo=claude&logoColor=white">
-    <br>
-<img src="https://img.shields.io/badge/TailwindCss-181717?style=for-the-badge&logo=Tailwindcss&logoColor=white">
-<img src="https://img.shields.io/badge/React-3776AB?style=for-the-badge&logo=React&logoColor=white">
-    <br>
-  <img src="https://img.shields.io/badge/github-181717?style=for-the-badge&logo=github&logoColor=white">
-  <img src="https://img.shields.io/badge/git-F05032?style=for-the-badge&logo=git&logoColor=white">
-  <br>
-</div>
+psql 환경에서 데이터가 정상적으로 삽입되고
+임베딩(p_vector, a_vector, q_vector)이 잘 생성되었는지 확인합니다.
+
+✅ 요약 실행 플로우
+# 1. 데이터 준비
+cp ./execptFile/*.xlsx ./Data/db_insert/panelData/
+
+# 2. 경로 및 DB 설정 수정
+# 3. 데이터 삽입
+python ./Data/db_insert/insert_all.py
+
+# 4. 임베딩 실행
+python ./embedding/embedding.py
+python ./embedding/profileVector.py
+
+# 5. DB 검수 (psql)
