@@ -36,6 +36,41 @@
 
 ---
 
+## 🤖 LLM 아키텍처 상세 (LLM Engineer)
+
+### 1. 🎯 하이브리드 RAG 전략 및 역할 분담
+
+저희 시스템은 **LangChain LCEL** 파이프라인을 기반으로, 검색 정확도와 비용 효율을 위해 각 LLM의 장점을 활용하는 **3단계 하이브리드 검색**을 채택했습니다.
+
+| 역할 (Stage) | 담당 모델/도구 | 전략적 의도 |
+| :--- | :--- | :--- |
+| **Encoder (1차 검색)** | **KURE-v1** | **비용 효율 및 속도:** 한국어에 특화된 모델로 Top-20 후보군을 빠르고 저렴하게 확보. |
+| **Retriever (정제/재순위)**| **OpenAI (GPT-4o-mini)**| **검색 정확도 극대화:** 1차 검색된 20개 문서 중 최종 Top-3 문서를 선별하는 정밀 분석 역할. |
+| **Decoder (최종 생성)** | **Claude 3 Haiku** | **운영 경제성:** 비용 효율적인 모델로 최종 답변을 생성하며, LLM 디자이너의 프롬프트 지침에 따라 답변 신뢰도를 유지. |
+
+### 2. 🔗 프롬프트 및 기능 제어
+
+* **대화형 검색:** **`session_id`** 기반의 메모리(History) 관리를 통해 사용자의 **후속 질문 맥락**을 기억하고 답변하는 기능을 구현했습니다.
+* **지능적 프롬프트:** LLM에게 **오탈자 교정** 및 **질문 재작성**을 지시하여 검색 실패율을 낮추고, "참고 문서 외 사용 금지" 규칙으로 **환각을 차단**합니다.
+
+---
+
+## 🛠️ 환경 구축 (Installation & Setup)
+
+프로젝트를 실행하려면 다음 라이브러리 설치와 환경 변수 설정이 필수입니다.
+
+#### A. 필수 Python 라이브러리 설치 (`pip install`)
+
+모든 RAG 기능을 구동하기 위해 다음 명령어를 통해 라이브러리를 설치합니다.
+
+```bash
+# 1. LangChain Core, Anthropic, OpenAI, HuggingFace 모듈 설치
+pip install langchain langchain-core langchain-community langchain-anthropic langchain-openai 
+
+# 2. Python 환경 설정 및 DB 드라이버 설치
+pip install python-dotenv psycopg2-binary numpy sentence-transformers
+
+
 ## 🧭 Git 명령어 치트시트
 
 | 명령어                       | 설명                          |
@@ -84,3 +119,5 @@
 📢 **Note**
 
 - 상세 규칙(API 계약, ERD, Definition of Done 등)은 `/docs` 디렉토리 참고.
+
+
