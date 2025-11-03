@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-const ChatInterface = ({ onSearch, isLoading, uploadedData }) => {
+const ChatInterface = ({ onSearch, isLoading }) => {
   const [messages, setMessages] = useState([]);
   const [currentQuery, setCurrentQuery] = useState('');
   const [searchHistory, setSearchHistory] = useState([]);
@@ -17,7 +17,7 @@ const ChatInterface = ({ onSearch, isLoading, uploadedData }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!currentQuery.trim() || !uploadedData) return;
+    if (!currentQuery.trim()) return;
 
     // 사용자 메시지 추가
     const userMessage = {
@@ -109,9 +109,9 @@ const ChatInterface = ({ onSearch, isLoading, uploadedData }) => {
       {/* 검색 입력창 */}
       <div className="relative">
         <form onSubmit={handleSubmit}>
-          <div className={`flex items-center bg-gray-900/95 backdrop-blur-sm border border-gray-700/50 rounded-2xl shadow-2xl transition-all duration-300 ${!uploadedData ? 'opacity-50' : 'hover:shadow-purple-500/25 hover:shadow-2xl hover:border-purple-500/50'} ${uploadedData ? 'shadow-purple-500/20' : ''}`}>
+          <div className="flex items-center bg-gray-900/95 backdrop-blur-sm border border-gray-700/50 rounded-2xl shadow-2xl transition-all duration-300 hover:shadow-purple-500/25 hover:shadow-2xl hover:border-purple-500/50 shadow-purple-500/20">
             <div className="pl-6 pr-4">
-              <svg className={`w-6 h-6 transition-colors duration-200 ${!uploadedData ? 'text-gray-500' : 'text-gray-300'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-6 h-6 transition-colors duration-200 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
             </div>
@@ -123,15 +123,15 @@ const ChatInterface = ({ onSearch, isLoading, uploadedData }) => {
                 setCurrentQuery(e.target.value);
                 setShowSuggestions(e.target.value.length > 0);
               }}
-              placeholder={!uploadedData ? "먼저 데이터 파일을 업로드하세요" : "데이터에 대해 자연어로 질문하세요..."}
-              disabled={!uploadedData}
+              placeholder="데이터에 대해 자연어로 질문하세요..."
+              disabled={false}
               className="flex-1 py-4 px-2 text-white bg-transparent border-none outline-none text-lg placeholder-gray-400 font-light"
             />
 
             <div className="pr-6">
               <button
                 type="submit"
-                disabled={!uploadedData || !currentQuery.trim()}
+                disabled={!currentQuery.trim()}
                 className="p-3 rounded-xl bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-500 hover:to-purple-600 transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed shadow-lg hover:shadow-purple-500/50 hover:shadow-xl"
               >
                 <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -143,7 +143,7 @@ const ChatInterface = ({ onSearch, isLoading, uploadedData }) => {
         </form>
 
         {/* 자동완성 및 검색 히스토리 */}
-        {showSuggestions && uploadedData && (
+        {showSuggestions && (
           <div className="absolute top-full left-0 right-0 mt-2 bg-white/95 backdrop-blur-md border border-gray-200/50 rounded-xl shadow-2xl z-10 overflow-hidden">
             {searchHistory.length > 0 && (
               <div className="p-4 border-b border-gray-100">
