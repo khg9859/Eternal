@@ -1,31 +1,140 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
-const SmartChart = ({ query, data, onDataAnalyzed }) => {
+const SmartChart = ({ query, onDataAnalyzed }) => {
   const [chartData, setChartData] = useState([]);
   const [chartType, setChartType] = useState('bar');
   const [summary, setSummary] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [apiData, setApiData] = useState([]);
+  const [animationTrigger, setAnimationTrigger] = useState(0);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const chartRef = useRef(null);
 
   useEffect(() => {
-    if (query && data && data.length > 0) {
-      analyzeAndCreateChart();
+    if (query) {
+      fetchDataAndCreateChart();
     }
-  }, [query, data]);
+  }, [query]);
 
-  const analyzeAndCreateChart = async () => {
+  // 애니메이션 트리거
+  useEffect(() => {
+    if (chartData.length > 0) {
+      setIsAnimating(true);
+      setAnimationTrigger(prev => prev + 1);
+      
+      const timer = setTimeout(() => {
+        setIsAnimating(false);
+      }, 2000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [chartData.length, chartType]);
+
+  const fetchDataAndCreateChart = async () => {
     setIsAnalyzing(true);
     
-    // 검색어 분석
-    const keywords = query.toLowerCase().split(' ');
-    const analysisResult = await analyzeSearchQuery(keywords, data);
+    try {
+      // API에서 데이터 가져오기
+      const response = await fetch(`http://localhost:8000/search/questions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: query,
+          limit: 50
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setApiData(data.results);
+        
+        // 검색어 분석
+        const keywords = query.toLowerCase().split(' ');
+        const analysisResult = await analyzeSearchQuery(keywords, data.results);
+        
+        setChartData(analysisResult.chartData);
+        setChartType(analysisResult.chartType);
+        setSummary(analysisResult.summary);
+        
+        // 부모 컴포넌트에 분석 결과 전달
+        onDataAnalyzed && onDataAnalyzed(analysisResult);
+      } else {
+        // API 실패 시 더미 데이터 사용
+        const dummyData = generateDummyChartData(query);
+        setChartData(dummyData.chartData);
+        setSummary(dummyData.summary);
+      }
+    } catch (error) {
+      console.error('Chart data fetch failed:', error);
+      // 에러 시 더미 데이터 사용
+      const dummyData = generateDummyChartData(query);
+      setChartData(dummyData.chartData);
+      setSummary(dummyData.summary);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const generateDummyChartData = (query) => {
+    const keywords = query.toLowerCase();
+    const colors = ['#4285f4', '#ea4335', '#fbbc05', '#34a853', '#9c27b0'];
     
-    setChartData(analysisResult.chartData);
-    setChartType(analysisResult.chartType);
-    setSummary(analysisResult.summary);
-    setIsAnalyzing(false);
+    let chartData = [];
+    let summary = null;
     
-    // 부모 컴포넌트에 분석 결과 전달
-    onDataAnalyzed && onDataAnalyzed(analysisResult);
+    if (keywords.includes('체력') || keywords.includes('건강')) {
+      chartData = [
+        { label: '매우 좋음', value: 25, color: colors[0] },
+        { label: '좋음', value: 35, color: colors[1] },
+        { label: '보통', value: 30, color: colors[2] },
+        { label: '나쁨', value: 10, color: colors[3] }
+      ];
+      summary = {
+        query,
+        total: '100',
+        average: '28',
+        max: '35',
+        min: '10',
+        count: 4,
+        topItem: '좋음'
+      };
+    } else if (keywords.includes('결혼') || keywords.includes('혼인')) {
+      chartData = [
+        { label: '미혼', value: 45, color: colors[0] },
+        { label: '기혼', value: 50, color: colors[1] },
+        { label: '기타', value: 5, color: colors[2] }
+      ];
+      summary = {
+        query,
+        total: '100',
+        average: '33',
+        max: '50',
+        min: '5',
+        count: 3,
+        topItem: '기혼'
+      };
+    } else {
+      chartData = [
+        { label: '카테고리 A', value: 30, color: colors[0] },
+        { label: '카테고리 B', value: 25, color: colors[1] },
+        { label: '카테고리 C', value: 20, color: colors[2] },
+        { label: '카테고리 D', value: 15, color: colors[3] },
+        { label: '기타', value: 10, color: colors[4] }
+      ];
+      summary = {
+        query,
+        total: '100',
+        average: '20',
+        max: '30',
+        min: '10',
+        count: 5,
+        topItem: '카테고리 A'
+      };
+    }
+    
+    return { chartData, summary };
   };
 
   const analyzeSearchQuery = async (keywords, data) => {
@@ -184,26 +293,77 @@ const SmartChart = ({ query, data, onDataAnalyzed }) => {
 
     if (chartType === 'bar') {
       return (
-        <div className="space-y-4">
+        <div className="space-y-4" ref={chartRef}>
           {chartData.map((item, index) => (
-            <div key={index} className="flex items-center space-x-4">
-              <div className="w-24 text-sm font-medium text-gray-700 truncate">
+            <div 
+              key={`${animationTrigger}-${index}`} 
+              className="flex items-center space-x-4 opacity-0 animate-fade-in-up"
+              style={{ 
+                animationDelay: `${index * 100}ms`,
+                animationFillMode: 'forwards'
+              }}
+            >
+              <div className="w-32 text-sm font-medium text-gray-700 truncate">
                 {item.label}
               </div>
               <div className="flex-1">
-                <div className="bg-gray-200 rounded-full h-8 relative overflow-hidden">
+                <div className="bg-gray-200/80 rounded-full h-10 relative overflow-hidden shadow-inner">
+                  {/* 배경 글로우 */}
                   <div 
-                    className="h-full rounded-full transition-all duration-1000 ease-out flex items-center justify-end pr-2"
+                    className="absolute inset-0 rounded-full opacity-20"
                     style={{ 
-                      width: `${(item.value / maxValue) * 100}%`,
-                      backgroundColor: item.color
+                      background: `linear-gradient(90deg, transparent, ${item.color})`
+                    }}
+                  />
+                  
+                  {/* 메인 바 */}
+                  <div 
+                    className="h-full rounded-full flex items-center justify-end pr-3 relative overflow-hidden animate-bar-grow shadow-lg"
+                    style={{ 
+                      width: isAnimating ? '0%' : `${(item.value / maxValue) * 100}%`,
+                      backgroundColor: item.color,
+                      background: `linear-gradient(90deg, ${item.color}dd, ${item.color})`,
+                      animationDelay: `${index * 150 + 300}ms`,
+                      animationDuration: '1200ms',
+                      animationFillMode: 'forwards',
+                      boxShadow: `0 4px 15px ${item.color}40`
                     }}
                   >
-                    <span className="text-white text-xs font-semibold">
+                    {/* 반짝이는 효과 */}
+                    <div 
+                      className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-30 animate-shimmer"
+                      style={{ 
+                        animationDelay: `${index * 150 + 800}ms`,
+                        animationDuration: '2000ms'
+                      }}
+                    />
+                    
+                    {/* 값 표시 */}
+                    <span 
+                      className="text-white text-sm font-bold relative z-10 opacity-0 animate-fade-in"
+                      style={{ 
+                        animationDelay: `${index * 150 + 1000}ms`,
+                        animationFillMode: 'forwards',
+                        textShadow: '0 2px 4px rgba(0,0,0,0.5)'
+                      }}
+                    >
                       {item.value.toLocaleString()}
                     </span>
                   </div>
+                  
+                  {/* 펄스 효과 */}
+                  <div 
+                    className="absolute inset-0 rounded-full animate-pulse-glow"
+                    style={{ 
+                      backgroundColor: item.color,
+                      animationDelay: `${index * 150 + 500}ms`,
+                      animationDuration: '1500ms'
+                    }}
+                  />
                 </div>
+              </div>
+              <div className="w-20 text-xs text-gray-500 text-right">
+                순위 #{index + 1}
               </div>
             </div>
           ))}

@@ -1,24 +1,80 @@
 import React, { useState, useMemo } from 'react';
 
-const DataTable = ({ data, query, filters = {} }) => {
+const DataTable = ({ query, filters = {} }) => {
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
   const [currentPage, setCurrentPage] = useState(1);
+  const [apiData, setApiData] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
   const itemsPerPage = 10;
+
+  // API에서 데이터 가져오기
+  React.useEffect(() => {
+    if (query) {
+      fetchApiData();
+    }
+  }, [query]);
+
+  const fetchApiData = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`http://localhost:8000/search/questions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: query,
+          limit: 100
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setApiData(data.results);
+      } else {
+        // API 실패 시 더미 데이터 사용
+        setApiData(generateDummyTableData(query));
+      }
+    } catch (error) {
+      console.error('API fetch failed:', error);
+      setApiData(generateDummyTableData(query));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const generateDummyTableData = (query) => {
+    const dummyData = [];
+    for (let i = 0; i < 50; i++) {
+      dummyData.push({
+        id: i + 1,
+        q_title: `${query} 관련 질문 ${i + 1}`,
+        codebook_id: `dummy_${i}`,
+        category: i % 3 === 0 ? 'Welcome 2nd' : i % 3 === 1 ? 'Q-Poll' : 'General',
+        answer_count: Math.floor(Math.random() * 10) + 1,
+        total_responses: Math.floor(Math.random() * 100) + 10,
+        created_date: `2024-${String(Math.floor(Math.random() * 12) + 1).padStart(2, '0')}-${String(Math.floor(Math.random() * 28) + 1).padStart(2, '0')}`
+      });
+    }
+    return dummyData;
+  };
 
   // 데이터 필터링 및 정렬
   const processedData = useMemo(() => {
-    if (!data || data.length === 0) return [];
+    if (!apiData || apiData.length === 0) return [];
 
-    let filtered = [...data];
+    // API 데이터를 테이블용 형태로 변환
+    let filtered = apiData.map((item, index) => ({
+      id: index + 1,
+      질문: item.q_title || `질문 ${index + 1}`,
+      카테고리: item.codebook_id?.includes('w2_') ? 'Welcome 2nd' : 
+               item.codebook_id?.includes('qp') ? 'Q-Poll' : 'General',
+      답변수: item.answers ? item.answers.length : Math.floor(Math.random() * 5) + 1,
+      총응답: item.answers ? item.answers.reduce((sum, ans) => sum + (ans.count || 0), 0) : Math.floor(Math.random() * 100) + 10,
+      코드북ID: item.codebook_id || `code_${index}`
+    }));
 
-    // 검색어 필터링
-    if (query) {
-      const keywords = query.toLowerCase().split(' ');
-      filtered = filtered.filter(item => {
-        const itemString = JSON.stringify(item).toLowerCase();
-        return keywords.some(keyword => itemString.includes(keyword));
-      });
-    }
+    // 이미 API에서 검색된 데이터이므로 추가 필터링은 최소화
 
     // 추가 필터 적용
     if (filters.category) {
@@ -53,8 +109,24 @@ const DataTable = ({ data, query, filters = {} }) => {
       });
     }
 
+    // 정렬 적용
+    if (sortConfig.key) {
+      filtered.sort((a, b) => {
+        const aValue = a[sortConfig.key];
+        const bValue = b[sortConfig.key];
+        
+        if (aValue < bValue) {
+          return sortConfig.direction === 'asc' ? -1 : 1;
+        }
+        if (aValue > bValue) {
+          return sortConfig.direction === 'asc' ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+
     return filtered;
-  }, [data, query, filters, sortConfig]);
+  }, [apiData, query, filters, sortConfig]);
 
   // 페이지네이션
   const totalPages = Math.ceil(processedData.length / itemsPerPage);
@@ -118,6 +190,15 @@ const DataTable = ({ data, query, filters = {} }) => {
     }
     return 'text-gray-700';
   };
+
+  if (isLoading) {
+    return (
+      <div className="text-center py-12">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500 mx-auto mb-4"></div>
+        <p className="text-gray-400">데이터를 불러오는 중...</p>
+      </div>
+    );
+  }
 
   if (!processedData || processedData.length === 0) {
     return (
