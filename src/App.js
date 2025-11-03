@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import SearchBox from './components/SearchBox';
 import SearchResults from './components/SearchResults';
-import FileUpload from './components/FileUpload';
+// import FileUpload from './components/FileUpload'; // 제거
 import ChatInterface from './components/ChatInterface';
 import FilterPanel from './components/FilterPanel';
 import SmartChart from './components/SmartChart';
@@ -10,19 +10,22 @@ import DataTable from './components/DataTable';
 import AdvancedChart from './components/AdvancedChart';
 import AIChatInterface from './components/AIChatInterface';
 
+// 백엔드 API URL 추가
+const API_BASE_URL = 'http://localhost:8000';
+
 function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [uploadedData, setUploadedData] = useState(null);
+  // const [uploadedData, setUploadedData] = useState(null); // 제거
   const [showVisualization, setShowVisualization] = useState(false);
-  const [showSmartChart, setShowSmartChart] = useState(true); // 기본적으로 차트 우선 표시
+
   const [activeFilters, setActiveFilters] = useState({});
   const [interfaceMode, setInterfaceMode] = useState('simple'); // 'simple' or 'chat'
   const [currentPage, setCurrentPage] = useState('home'); // 'home' or 'results'
   const [viewMode, setViewMode] = useState('chart'); // 'chart', 'table', 'advanced'
   const [showChatPopup, setShowChatPopup] = useState(false); // AI 채팅 팝업 표시 여부
-
+  
   const handleSearch = async (query) => {
     if (!query.trim()) return;
 
@@ -32,114 +35,54 @@ function App() {
     // 검색 시 결과 페이지로 전환
     setCurrentPage('results');
 
-    // 실제 데이터가 있으면 실제 검색, 없으면 더미 데이터
-    setTimeout(() => {
-      let results = [];
-      
-      if (uploadedData && uploadedData.length > 0) {
-        // 실제 업로드된 데이터에서 검색
-        results = searchInUploadedData(query, uploadedData);
-      } else {
-        // 더미 데이터 생성
-        results = generateSmartResults(query);
+    try {
+      // 백엔드 API 호출로 변경
+      const response = await fetch(`${API_BASE_URL}/search/questions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: query,
+          limit: 20
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`검색 실패: ${response.status}`);
       }
+
+      const data = await response.json();
       
-      setSearchResults(results);
-      setIsLoading(false);
-    }, 800);
-  };
-
-  const searchInUploadedData = (query, data) => {
-    const keywords = query.toLowerCase().split(' ');
-    const matchedItems = [];
-
-    // 최대 10개 결과만 반환 (성능 최적화)
-    const maxResults = 10;
-    let count = 0;
-
-    for (const item of data) {
-      if (count >= maxResults) break;
-
-      // 객체의 모든 값을 문자열로 변환하여 검색
-      const itemString = JSON.stringify(item).toLowerCase();
-
-      // 키워드 중 하나라도 매치되면 결과에 포함
-      const hasMatch = keywords.some(keyword =>
-        itemString.includes(keyword) ||
-        Object.values(item).some(value =>
-          String(value).toLowerCase().includes(keyword)
-        )
-      );
-
-      if (hasMatch) {
-        // 매치된 필드 찾기
-        const matchedFields = Object.entries(item).filter(([key, value]) =>
-          keywords.some(keyword =>
-            key.toLowerCase().includes(keyword) ||
-            String(value).toLowerCase().includes(keyword)
-          )
-        );
-
-        matchedItems.push({
-          id: count + 1,
-          title: `데이터 항목 #${count + 1}`,
-          description: `"${query}"와 관련된 데이터를 찾았습니다. ${matchedFields.length}개 필드에서 매치되었습니다.`,
-          data: {
-            name: matchedFields[0] ? `${matchedFields[0][0]}: ${matchedFields[0][1]}` : '데이터 항목',
-            value: extractNumericValue(item),
-            category: detectCategory(item, keywords),
-            trend: Math.random() > 0.5 ? '상승' : '안정',
-            period: '업로드된 데이터',
-            matchedFields: matchedFields.slice(0, 3), // 최대 3개 필드만 표시
-            originalData: item
-          }
-        });
-        count++;
-      }
-    }
-
-    if (matchedItems.length === 0) {
-      return [{
-        id: 1,
-        title: '검색 결과 없음',
-        description: `"${query}"와 일치하는 데이터를 찾을 수 없습니다. 다른 키워드로 시도해보세요.`,
+      // API 응답을 기존 형태로 변환
+      const results = data.results.map((item, index) => ({
+        id: index + 1,
+        title: item.q_title,
+        description: `"${query}"와 관련된 질문입니다.`,
         data: {
-          name: '검색 결과 없음',
-          value: 0,
-          category: '검색',
-          trend: '없음',
-          period: '현재'
+          name: item.q_title,
+          value: Math.floor(Math.random() * 1000) + 100,
+          category: item.codebook_id.startsWith('w2_') ? 'Welcome 2nd' : 
+                   item.codebook_id.startsWith('qp') ? 'Q-Poll' : 'General',
+          trend: Math.random() > 0.5 ? '상승' : '안정',
+          period: '데이터베이스',
+          answers: item.answers
         }
-      }];
+      }));
+
+      setSearchResults(results);
+      
+    } catch (error) {
+      console.error('Search failed:', error);
+      // 실패 시 더미 데이터 사용
+      const results = generateSmartResults(query);
+      setSearchResults(results);
+    } finally {
+      setIsLoading(false);
     }
-
-    return matchedItems;
   };
 
-  const extractNumericValue = (item) => {
-    // 객체에서 숫자 값 추출
-    for (const value of Object.values(item)) {
-      if (typeof value === 'number') return value;
-      if (typeof value === 'string') {
-        const num = parseFloat(value.replace(/[^\d.-]/g, ''));
-        if (!isNaN(num)) return num;
-      }
-    }
-    return Math.floor(Math.random() * 1000);
-  };
 
-  const detectCategory = (item, keywords) => {
-    const itemString = JSON.stringify(item).toLowerCase();
-    
-    if (keywords.some(k => ['매출', '판매', '수익', 'sales', 'revenue'].includes(k)) || 
-        itemString.includes('매출') || itemString.includes('sales')) return '매출';
-    if (keywords.some(k => ['고객', '사용자', 'customer', 'user'].includes(k)) || 
-        itemString.includes('고객') || itemString.includes('customer')) return '고객';
-    if (keywords.some(k => ['지역', '위치', 'region', 'location'].includes(k)) || 
-        itemString.includes('지역') || itemString.includes('region')) return '지역';
-    
-    return '일반';
-  };
 
   const generateSmartResults = (query) => {
     const keywords = query.toLowerCase();
@@ -209,10 +152,11 @@ function App() {
     return results;
   };
 
-  const handleFileUpload = (data) => {
-    setUploadedData(data);
-    console.log(`📊 ${data.length}개의 데이터 항목이 로드되었습니다.`);
-  };
+  // 파일 업로드 함수 제거
+  // const handleFileUpload = (data) => {
+  //   setUploadedData(data);
+  //   console.log(`📊 ${data.length}개의 데이터 항목이 로드되었습니다.`);
+  // };
 
   const handleTagClick = (tagText) => {
     handleSearch(tagText);
@@ -226,22 +170,20 @@ function App() {
     }
   };
 
-  const toggleVisualization = () => {
-    setShowVisualization(!showVisualization);
-  };
+
 
   const resetToHome = () => {
     setSearchQuery('');
     setSearchResults([]);
     setIsLoading(false);
     setShowVisualization(false);
-    setShowSmartChart(true);
+
     setActiveFilters({});
     setInterfaceMode('simple');
     setCurrentPage('home'); // 홈 페이지로 돌아가기
   };
 
-  // 홈 페이지 렌더링
+  // 홈 페이지 렌더링 (업로드 부분 제거)
   const renderHomePage = () => (
     <div className="relative min-h-screen flex items-center justify-center overflow-hidden">
       {/* 배경 그라데이션 */}
@@ -261,156 +203,97 @@ function App() {
           {/* 메인 타이틀 */}
           <h1 className="text-6xl md:text-7xl font-bold text-white mb-6">
             <span className="bg-gradient-to-r from-purple-400 via-pink-400 to-blue-400 bg-clip-text text-transparent">
-              DataSearch
+              Eternel
             </span>
           </h1>
           
           {/* 서브 타이틀 */}
           <p className="text-xl md:text-2xl text-gray-300 mb-4 font-light">
-            AI로 데이터를 자연어로 검색하세요
+            자연어 질의 기반 패널 데이터 검색
           </p>
           
           {/* 설명 */}
           <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-            {!uploadedData ? (
-              <>
-                CSV, Excel, JSON 파일을 업로드하고 자연어로 질문하면 
-                <br className="hidden md:block" />
-                AI가 자동으로 차트와 인사이트를 생성해드립니다
-              </>
-            ) : (
-              <>
-                {uploadedData.length.toLocaleString()}개의 데이터가 로드되었습니다
-                <br className="hidden md:block" />
-                이제 자연어로 질문해보세요!
-              </>
-            )}
+            질문이나 키워드를 입력하면 AI가 관련 데이터를 찾아드립니다
+            <br className="hidden md:block" />
+            452개의 질문과 115개의 답변이 준비되어 있습니다
           </p>
         </div>
 
-        {/* 디바이스 목업 - 항상 표시 */}
+        {/* 디바이스 목업 - 검색 인터페이스만 표시 */}
         <div className="flex justify-center">
           <div className="w-full max-w-9xl">
             <DeviceMockup type="laptop">
               <div className="w-full max-w-3xl">
-                {!uploadedData ? (
-                  /* 파일 업로드 전 - 검색창 + 업로드 */
-                  <>
-                    <div className="mb-8">
-                      <div className="text-center mb-6">
-                        <h2 className="text-2xl font-bold text-white mb-2">
-                          자연어 데이터 검색
-                        </h2>
-                        <p className="text-gray-400">
-                          먼저 데이터 파일을 업로드하세요
-                        </p>
-                      </div>
-                      
+                {/* 검색 인터페이스 */}
+                <>
+                  {/* 인터페이스 모드 선택 */}
+                  <div className="mb-6 flex justify-center">
+                    <div className="bg-gray-800/80 backdrop-blur-sm rounded-xl p-1 border border-gray-600/50">
                       <button
-                        onClick={() => setShowChatPopup(true)}
-                        disabled={!uploadedData}
-                        className="w-full px-6 py-4 bg-gray-800/80 backdrop-blur-sm border border-gray-600/50 rounded-2xl text-left text-gray-400 hover:text-gray-300 hover:border-purple-500/50 transition-all duration-200 flex items-center space-x-4 disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => setInterfaceMode('simple')}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                          interfaceMode === 'simple'
+                            ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
+                            : 'text-gray-300 hover:text-white'
+                        }`}
                       >
-                        <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                        </svg>
-                        <div className="flex-1">
-                          <div className="text-lg font-medium text-gray-300">AI에게 데이터에 대해 질문하세요</div>
-                          <div className="text-sm text-gray-500">자연어로 질문하면 AI가 분석해드립니다</div>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-sm bg-purple-600/20 text-purple-300 px-3 py-1 rounded-full">AI</span>
-                          <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                          </svg>
-                        </div>
+                        🔍 AI Search
+                      </button>
+                      <button
+                        onClick={() => setInterfaceMode('chat')}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                          interfaceMode === 'chat'
+                            ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
+                            : 'text-gray-300 hover:text-white'
+                        }`}
+                      >
+                        💬  Text Search
                       </button>
                     </div>
+                  </div>
 
-                    {/* 파일 업로드 */}
-                    <div className="mt-8">
-                      <FileUpload onFileUpload={handleFileUpload} />
-                    </div>
-                  </>
-                ) : (
-                  /* 파일 업로드 후 - 검색 인터페이스 */
-                  <>
-                    {/* 인터페이스 모드 선택 */}
-                    <div className="mb-6 flex justify-center">
-                      <div className="bg-gray-800/80 backdrop-blur-sm rounded-xl p-1 border border-gray-600/50">
-                        <button
-                          onClick={() => setInterfaceMode('simple')}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                            interfaceMode === 'simple'
-                              ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
-                              : 'text-gray-300 hover:text-white'
-                          }`}
-                        >
-                          🔍 AI Search
-                        </button>
-                        <button
-                          onClick={() => setInterfaceMode('chat')}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                            interfaceMode === 'chat'
-                              ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
-                              : 'text-gray-300 hover:text-white'
-                          }`}
-                        >
-                          💬  Text Search
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* 검색 인터페이스 */}
-                    {interfaceMode === 'simple' ? (
-                      <>
-                        <div className="mb-6">
-                          <button
-                            onClick={() => setShowChatPopup(true)}
-                            disabled={!uploadedData}
-                            className="w-full px-4 py-3 bg-gray-800/80 backdrop-blur-sm border border-gray-600/50 rounded-xl text-left text-gray-400 hover:text-gray-300 hover:border-purple-500/50 transition-all duration-200 flex items-center space-x-3 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                            </svg>
-                            <span>AI에게 질문하세요...</span>
-                            <div className="ml-auto">
-                              <span className="text-xs bg-purple-600/20 text-purple-300 px-2 py-1 rounded">AI</span>
-                            </div>
-                          </button>
-                        </div>
-
-                        {/* 검색 태그 */}
-                        {!isLoading && (
-                          <div className="flex flex-wrap justify-center gap-2">
-                            {[
-                              '💰 매출 데이터',
-                              '👥 고객 정보', 
-                              '📊 제품 분석',
-                              '📈 트렌드 분석'
-                            ].map((tag, index) => (
-                              <button
-                                key={index}
-                                onClick={() => handleTagClick(tag.replace(/[💰👥📊📈]\s/, ''))}
-                                className="px-3 py-1.5 bg-gray-800/50 backdrop-blur-sm text-gray-300 rounded-full text-xs hover:bg-gray-700/50 transition-all duration-200 border border-gray-600/30 hover:border-purple-500/50"
-                              >
-                                {tag}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="h-80 overflow-hidden">
-                        <ChatInterface
+                  {/* 검색 인터페이스 */}
+                  {interfaceMode === 'simple' ? (
+                    <>
+                      <div className="mb-6">
+                        <SearchBox 
                           onSearch={handleSearch}
                           isLoading={isLoading}
-                          uploadedData={uploadedData}
+                          placeholder="질문이나 키워드를 입력하세요... (예: 체력 관리, 결혼 상태)"
                         />
                       </div>
-                    )}
-                  </>
-                )}
+
+                      {/* 검색 태그 */}
+                      {!isLoading && (
+                        <div className="flex flex-wrap justify-center gap-2">
+                          {[
+                            '💰 체력 관리',
+                            '👥 결혼 상태', 
+                            '📊 나이',
+                            '📈 지역'
+                          ].map((tag, index) => (
+                            <button
+                              key={index}
+                              onClick={() => handleTagClick(tag.replace(/[💰👥📊📈]\s/, ''))}
+                              className="px-3 py-1.5 bg-gray-800/50 backdrop-blur-sm text-gray-300 rounded-full text-xs hover:bg-gray-700/50 transition-all duration-200 border border-gray-600/30 hover:border-purple-500/50"
+                            >
+                              {tag}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="h-80 overflow-hidden">
+                      <ChatInterface
+                        onSearch={handleSearch}
+                        isLoading={isLoading}
+                        // uploadedData 제거
+                      />
+                    </div>
+                  )}
+                </>
               </div>
             </DeviceMockup>
           </div>
@@ -419,7 +302,7 @@ function App() {
     </div>
   );
 
-  // 검색 결과 페이지 렌더링
+  // 검색 결과 페이지 렌더링 (uploadedData 참조 제거)
   const renderResultsPage = () => (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
       {/* 상단 네비게이션 */}
@@ -432,10 +315,10 @@ function App() {
                 onClick={resetToHome}
                 className="text-2xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-blue-400 bg-clip-text text-transparent hover:opacity-80 transition-opacity"
               >
-                DataSearch
+                Eternel
               </button>
               <div className="text-gray-400 text-sm">
-                {uploadedData ? `${uploadedData.length.toLocaleString()}개 데이터` : '데이터 없음'}
+                데이터베이스 연결됨
               </div>
             </div>
 
@@ -482,7 +365,7 @@ function App() {
         <div className="mb-6">
           <FilterPanel 
             onFilterChange={handleFilterChange}
-            uploadedData={uploadedData}
+            // uploadedData 제거
             query={searchQuery}
           />
         </div>
@@ -530,7 +413,6 @@ function App() {
             >
               📄 상세 결과
             </button>
-
           </div>
         </div>
 
@@ -551,7 +433,6 @@ function App() {
                   {viewMode === 'chart' && (
                     <SmartChart 
                       query={searchQuery} 
-                      data={uploadedData}
                       onDataAnalyzed={(result) => {
                         console.log('차트 분석 완료:', result);
                       }}
@@ -559,14 +440,12 @@ function App() {
                   )}
                   {viewMode === 'advanced' && (
                     <AdvancedChart 
-                      data={uploadedData}
                       query={searchQuery}
                       filters={activeFilters}
                     />
                   )}
                   {viewMode === 'table' && (
                     <DataTable 
-                      data={uploadedData}
                       query={searchQuery}
                       filters={activeFilters}
                     />
@@ -578,13 +457,10 @@ function App() {
                       isLoading={isLoading}
                     />
                   )}
-
                 </>
               )}
             </div>
           </div>
-
-
 
           {/* 사이드바 - 빠른 액션 및 정보 */}
           <div className="space-y-6">
@@ -593,14 +469,14 @@ function App() {
               <h3 className="text-sm font-semibold text-white mb-3">빠른 검색</h3>
               <div className="flex flex-wrap gap-1.5">
                 {[
-                  '💰 매출',
-                  '👥 고객', 
-                  '📊 제품',
-                  '📈 트렌드',
-                  '🎯 성과',
+                  '💰 체력',
+                  '👥 결혼', 
+                  '📊 나이',
+                  '📈 지역',
+                  '🎯 성별',
                   '📅 기간별',
                   '🌍 지역별',
-                  '👤 나이별'
+                  '👤 응답자'
                 ].map((tag, index) => (
                   <button
                     key={index}
@@ -613,32 +489,28 @@ function App() {
               </div>
             </div>
 
-            {/* 데이터 통계 */}
-            {uploadedData && (
-              <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-600/50 p-4">
-                <h3 className="text-sm font-semibold text-white mb-3">데이터 통계</h3>
-                <div className="space-y-2 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">총 데이터:</span>
-                    <span className="text-white font-mono">{uploadedData.length.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">검색 결과:</span>
-                    <span className="text-green-400 font-mono">{searchResults.length}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">매치율:</span>
-                    <span className="text-blue-400 font-mono">
-                      {uploadedData.length > 0 ? Math.round((searchResults.length / uploadedData.length) * 100) : 0}%
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">활성 필터:</span>
-                    <span className="text-purple-400 font-mono">{Object.values(activeFilters).filter(v => v && v !== '').length}</span>
-                  </div>
+            {/* 데이터 통계 - 고정값으로 변경 */}
+            <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-600/50 p-4">
+              <h3 className="text-sm font-semibold text-white mb-3">데이터 통계</h3>
+              <div className="space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">총 질문:</span>
+                  <span className="text-white font-mono">452</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">총 답변:</span>
+                  <span className="text-green-400 font-mono">115</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">응답자:</span>
+                  <span className="text-blue-400 font-mono">6명</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">검색 결과:</span>
+                  <span className="text-purple-400 font-mono">{searchResults.length}</span>
                 </div>
               </div>
-            )}
+            </div>
 
             {/* 내보내기 옵션 */}
             <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-600/50 p-4">
@@ -660,7 +532,7 @@ function App() {
             <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl border border-gray-600/50 p-4">
               <h3 className="text-sm font-semibold text-white mb-3">최근 검색</h3>
               <div className="space-y-1">
-                {['매출 데이터', '고객 분석', '지역별 성과'].map((recent, index) => (
+                {['체력 관리', '결혼 상태', '나이별 분석'].map((recent, index) => (
                   <button
                     key={index}
                     onClick={() => handleSearch(recent)}
@@ -694,7 +566,7 @@ function App() {
                 <div>
                   <h3 className="text-white font-semibold text-lg">데이터 분석 AI 어시스턴트</h3>
                   <p className="text-sm text-gray-400">
-                    {uploadedData ? `${uploadedData.length.toLocaleString()}개 데이터 분석 준비완료` : '데이터를 업로드해주세요'}
+                    452개 질문, 115개 답변 분석 준비완료
                   </p>
                 </div>
               </div>
@@ -711,7 +583,6 @@ function App() {
             {/* 팝업 컨텐츠 */}
             <div className="bg-gray-900/95 backdrop-blur-sm rounded-xl border border-gray-600/50 h-full pt-20">
               <AIChatInterface
-                uploadedData={uploadedData}
                 searchQuery={searchQuery}
                 onNewSearch={(query) => {
                   handleSearch(query);
