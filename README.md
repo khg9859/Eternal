@@ -15,6 +15,7 @@ python -m venv venv
 
 venv\Scripts\activate
 ## 설치해야하는 라이브러리(가상환경에서)
+pip install fastapi uvicorn[standard] 
 pip install -U flask flask-cors python-dotenv psycopg2-binary numpy openai
 
 pip install -U langchain langchain-core langchain-community langchain-openai langchain-huggingface
@@ -31,6 +32,6 @@ pip install -U python-dotenv
 
 ## 실행 방법 ## (bash 두개 키고) 
 
-flask --app server run --port=5000 
+uvicorn server:app --host 0.0.0.0 --port 5000 --reload 
 
 npm start

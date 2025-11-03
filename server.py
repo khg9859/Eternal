@@ -3,17 +3,20 @@ import os, re, json
 from uuid import uuid4
 from pathlib import Path
 from functools import lru_cache
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 import numpy as np
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+
 from dotenv import load_dotenv
 
 from sentence_transformers import SentenceTransformer
 from openai import OpenAI
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 # =========================
 # 0) 환경
@@ -25,22 +28,29 @@ load_dotenv(ENV_PATH)
 DB = dict(
     host=os.getenv("DB_HOST", "localhost"),
     port=int(os.getenv("DB_PORT", "5432")),
-    dbname=os.getenv("DB_NAME", "mydb"),
+    dbname=os.getenv("DB_NAME", "survey_db"),
     user=os.getenv("DB_USER", "postgres"),
     password=os.getenv("DB_PASSWORD", "7302"),
 )
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CHAT_MODEL     = os.getenv("CHAT_MODEL", "gpt-4o-mini")
-EMBED_MODEL    = os.getenv("EMBED_MODEL", "nlpai-lab/KURE-v1")  # KURE 우선, 실패 시 폴백
+EMBED_MODEL    = os.getenv("EMBED_MODEL", "nlpai-lab/KURE-v1")
 
 OOS_WORDS = ["날씨","주가","환율","뉴스","교통","시간","주소","택배"]
 
-app = Flask(__name__)
-CORS(app)
+# 🔁 FastAPI 앱 & CORS
+app = FastAPI(title="Chat Search API (FastAPI)")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # =========================
-# 1) DB
+# 1) DB / 공통
 # =========================
 def get_conn():
     try:
@@ -49,58 +59,63 @@ def get_conn():
         print(f"[DB] connection failed: {e}")
         return None
 
-# 현 스키마 가정:
-# respondents(mb_sn, Q10(성별:M/F), Q11(출생년도:int), Q12_1(시/도), Q12_2(시군구), profile_vector(pgvector))
-def fetch_rows(limit: int | None = None) -> List[Dict[str, Any]]:
+# "만 NN 세" 같은 age 텍스트에서 숫자 추출
+AGE_NUM_RE = re.compile(r"만\s*(\d{1,3})\s*세")
+
+def parse_age_from_text(txt: Optional[str]) -> Optional[int]:
+    if not txt:
+        return None
+    m = AGE_NUM_RE.search(txt)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+    # 예외: "nan" 등
+    try:
+        # 혹시 "NN 세"만 있을 수도 있음
+        n = int(re.findall(r"\d{1,3}", txt)[-1])
+        return n
+    except Exception:
+        return None
+
+def normalize_gender_kor(g: Optional[str]) -> Optional[str]:
+    if not g:
+        return None
+    g = g.strip().lower()
+    if g in ("m", "male", "남", "남성"):
+        return "남성"
+    if g in ("f", "female", "여", "여성"):
+        return "여성"
+    return None
+
+# =========================
+# 2) 컨텍스트(Top-K) - respondents.profile_vector + metadata 조인
+# =========================
+def fetch_rows_for_rag(prelimit: int = 800) -> List[Dict[str, Any]]:
+    """
+    respondents.profile_vector를 읽고, metadata에서 성별/나이텍스트/지역을 가져온다.
+    """
     conn = get_conn()
     if not conn:
         return []
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            sql = 'SELECT mb_sn, "Q10", "Q11", "Q12_1", "Q12_2", profile_vector::text AS profile_vector FROM respondents'
-            if limit:
-                sql += " LIMIT %s"
-                cur.execute(sql, (limit,))
-            else:
-                cur.execute(sql)
+            sql = """
+            SELECT r.mb_sn,
+                   r.profile_vector::text AS profile_vector,
+                   m.gender AS gender_text,
+                   m.age    AS age_text,
+                   m.region AS region_text
+            FROM respondents r
+            LEFT JOIN metadata m ON m.mb_sn = r.mb_sn
+            LIMIT %s
+            """
+            cur.execute(sql, (prelimit,))
             return cur.fetchall()
     finally:
         conn.close()
 
-# where절 생성 (성별/연령대/시도/시군구)
-def _make_where_and_params(filters: Dict[str, Any]) -> tuple[str, list]:
-    where, params = [], []
-
-    # 성별: '남'/'여' 또는 'M'/'F' 모두 허용
-    g = filters.get("gender")
-    if g:
-        if g in ("남","여"):
-            g = "M" if g == "남" else "F"
-        where.append('"Q10" = %s')
-        params.append(g)
-
-    # 연령대: decade=30 → 30~39세
-    dec = filters.get("decade")
-    if dec is not None:
-        lo, hi = int(dec), int(dec)+9
-        where.append('(EXTRACT(YEAR FROM CURRENT_DATE)::int - "Q11"::int BETWEEN %s AND %s)')
-        params += [lo, hi]
-
-    # 시/도
-    if filters.get("sido"):
-        where.append('"Q12_1" = %s')
-        params.append(filters["sido"])
-
-    # 시군구
-    if filters.get("sigungu"):
-        where.append('"Q12_2" = %s')
-        params.append(filters["sigungu"])
-
-    return (("WHERE " + " AND ".join(where)) if where else ""), params
-
-# =========================
-# 2) 임베딩 (KURE → 폴백)
-# =========================
 @lru_cache(maxsize=1)
 def _load_embedder():
     print(f"[EMBED] loading: {EMBED_MODEL}")
@@ -124,26 +139,19 @@ def cos_sim(u: np.ndarray, v: np.ndarray) -> float:
 
 def fetch_topk_by_cosine(query: str, k: int = 5, prelimit: int = 800) -> List[Dict[str, Any]]:
     qv = embed_text(query)
-    rows = fetch_rows(limit=prelimit)
+    rows = fetch_rows_for_rag(prelimit=prelimit)
     scored: List[Tuple[float, Dict[str, Any]]] = []
     for r in rows:
         try:
             vec = np.array(json.loads(r["profile_vector"]), dtype=np.float32)
             n = np.linalg.norm(vec)
-            if n: vec = vec / n
+            if n:
+                vec = vec / n
             scored.append((cos_sim(qv, vec), r))
         except Exception:
             continue
     scored.sort(key=lambda x: x[0], reverse=True)
     return [row for _, row in scored[:k]]
-
-def birthyear_to_age(birth: str | int) -> int | None:
-    try:
-        y = int(str(birth))
-        from datetime import date
-        return date.today().year - y
-    except Exception:
-        return None
 
 def build_prompt(question: str, ctx_rows: List[Dict[str, Any]]) -> str:
     if not ctx_rows:
@@ -151,11 +159,12 @@ def build_prompt(question: str, ctx_rows: List[Dict[str, Any]]) -> str:
     else:
         lines = []
         for r in ctx_rows:
-            sex = "남성" if r.get("Q10") == "M" else ("여성" if r.get("Q10") == "F" else str(r.get("Q10")))
-            age = birthyear_to_age(r.get("Q11"))
-            loc = (r.get("Q12_1") or "")
-            if r.get("Q12_2"): loc += f" {r.get('Q12_2')}"
-            lines.append(f"- 성별={sex} | 나이={(str(age)+'세') if age is not None else '정보없음'} | 지역={loc}")
+            sex = r.get("gender_text") or "정보없음"
+            # age_text에서 숫자만 추출해 예쁘게 표시
+            age_num = parse_age_from_text(r.get("age_text"))
+            age_disp = f"{age_num}세" if age_num is not None else (r.get("age_text") or "정보없음")
+            region = r.get("region_text") or "정보없음"
+            lines.append(f"- 성별={sex} | 나이={age_disp} | 지역={region}")
         ctx = "\n".join(lines)
 
     return f"""아래 '컨텍스트'만 사용해 한국어로 간결히 답하세요.
@@ -170,7 +179,7 @@ ID나 출처는 드러내지 마십시오.
 """
 
 # =========================
-# 3) OpenAI (툴콜)
+# 3) OpenAI & 툴콜(집계는 metadata에서)
 # =========================
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -181,20 +190,18 @@ SYSTEM = (
     "ID/출처는 드러내지 말고, 간결한 한국어로 답해라."
 )
 
-# tools 스키마
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "count_people",
-            "description": "조건에 맞는 인원 수를 DB에서 집계한다.",
+            "description": "조건에 맞는 인원 수(metadata 기반)를 집계한다.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "gender":  {"type": ["string","null"], "description": "성별: '남' 또는 '여' 또는 'M'/'F'"},
+                    "gender":  {"type": ["string","null"], "description": "성별: 남/여/M/F"},
                     "decade":  {"type": ["integer","null"], "description": "연령대(10의 자리): 20,30,40 ..."},
-                    "sido":    {"type": ["string","null"], "description": "시/도(서울, 경기 등)"},
-                    "sigungu": {"type": ["string","null"], "description": "시/군/구(성동구, 분당구 등)"},
+                    "region":  {"type": ["string","null"], "description": "예: 서울, 경기, 부산 ..."},
                 },
                 "required": [],
             },
@@ -204,37 +211,55 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "most_region",
-            "description": "조건에 맞는 지역 레벨에서 '가장 많은' 1개 지역만 반환한다.",
+            "description": "조건에 맞는 사람들 중 가장 많은 지역 1개(metadata.region).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "gender":  {"type": ["string","null"]},
-                    "decade":  {"type": ["integer","null"]},
-                    "sido":    {"type": ["string","null"]},
-                    "sigungu": {"type": ["string","null"]},
-                    "level":   {"type": "string", "enum": ["sido", "sigungu"], "description": "집계 레벨"},
+                    "gender": {"type": ["string","null"]},
+                    "decade": {"type": ["integer","null"]},
                 },
-                "required": ["level"],
+                "required": [],
             },
         },
     },
 ]
 
-def _normalize_gender(g: str | None) -> str | None:
-    if not g: return None
-    if g in ("남","남성","M","m"): return "M"
-    if g in ("여","여성","F","f"): return "F"
-    return None
+def _where_for_metadata(filters: Dict[str, Any]) -> tuple[str, list]:
+    """metadata 테이블 전용 WHERE 생성 (gender/decade/region)"""
+    where, params = [], []
+
+    g = normalize_gender_kor(filters.get("gender"))
+    if g:
+        where.append("m.gender = %s")
+        params.append(g)
+
+    dec = filters.get("decade")
+    if dec is not None:
+        lo, hi = int(dec), int(dec) + 9
+        # age_text에서 '만 NN 세' 파싱 후 between
+        where.append("""
+          CASE
+            WHEN m.age IS NULL THEN NULL
+            ELSE
+              (REGEXP_REPLACE(m.age, '.*만\\s*(\\d{1,3})\\s*세.*', '\\1'))::int
+          END BETWEEN %s AND %s
+        """)
+        params += [lo, hi]
+
+    if filters.get("region"):
+        where.append("m.region = %s")
+        params.append(filters["region"])
+
+    return (("WHERE " + " AND ".join([w for w in where if w.strip()])) if where else ""), params
 
 def tool_count_people(args: Dict[str, Any]) -> Dict[str, Any]:
     flt = {
-        "gender": _normalize_gender(args.get("gender")),
+        "gender": args.get("gender"),
         "decade": args.get("decade"),
-        "sido": args.get("sido"),
-        "sigungu": args.get("sigungu"),
+        "region": args.get("region"),
     }
-    where_sql, params = _make_where_and_params(flt)
-    sql = f"SELECT COUNT(*) FROM respondents {where_sql}"
+    where_sql, params = _where_for_metadata(flt)
+    sql = f"SELECT COUNT(*) FROM metadata m {where_sql}"
     conn = get_conn()
     if not conn:
         return {"ok": False, "error": "DB connection failed"}
@@ -245,22 +270,18 @@ def tool_count_people(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def tool_most_region(args: Dict[str, Any]) -> Dict[str, Any]:
     flt = {
-        "gender": _normalize_gender(args.get("gender")),
+        "gender": args.get("gender"),
         "decade": args.get("decade"),
-        "sido": args.get("sido"),
-        "sigungu": args.get("sigungu"),
     }
-    level = args.get("level","sido")
-    group_col = '"Q12_2"' if level == "sigungu" else '"Q12_1"'
-    where_sql, params = _make_where_and_params(flt)
-    sql = f'''
-      SELECT {group_col} AS g, COUNT(*) AS c
-      FROM respondents
+    where_sql, params = _where_for_metadata(flt)
+    sql = f"""
+      SELECT m.region AS g, COUNT(*) AS c
+      FROM metadata m
       {where_sql}
-      GROUP BY {group_col}
-      ORDER BY c DESC
+      GROUP BY m.region
+      ORDER BY c DESC NULLS LAST
       LIMIT 1
-    '''
+    """
     conn = get_conn()
     if not conn:
         return {"ok": False, "error": "DB connection failed"}
@@ -268,15 +289,14 @@ def tool_most_region(args: Dict[str, Any]) -> Dict[str, Any]:
         cur.execute(sql, params)
         row = cur.fetchone()
     if not row or not row[0]:
-        return {"ok": True, "region": None, "count": 0, "level": level, "filters": flt}
-    return {"ok": True, "region": row[0], "count": int(row[1]), "level": level, "filters": flt}
+        return {"ok": True, "region": None, "count": 0, "filters": flt}
+    return {"ok": True, "region": row[0], "count": int(row[1]), "filters": flt}
 
 def llm_answer(question: str) -> str:
     """
-    1) 먼저 툴콜을 시도 (count / most_region)
-    2) 툴콜이 없거나 불필요하면 RAG로 문장 생성
+    1) 툴콜 시도 (count_people / most_region)
+    2) 없거나 불필요하면 RAG(top-K respondents + metadata 요약)로 답변
     """
-    # 1) 툴콜 시도
     msg = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": question},
@@ -290,9 +310,7 @@ def llm_answer(question: str) -> str:
     )
     m = first.choices[0].message
 
-    # 툴콜 처리
     if m.tool_calls:
-        # 최대 한 번만 수행(일반적으로 0~1회면 충분)
         tool_outputs_msgs = []
         for tc in m.tool_calls:
             name = tc.function.name
@@ -311,7 +329,6 @@ def llm_answer(question: str) -> str:
                 "content": json.dumps(out, ensure_ascii=False),
             })
 
-        # 도구 결과를 반영해 최종 답변 생성
         follow = client.chat.completions.create(
             model=CHAT_MODEL,
             temperature=0.2,
@@ -322,7 +339,7 @@ def llm_answer(question: str) -> str:
         )
         return follow.choices[0].message.content.strip()
 
-    # 2) 툴콜이 없으면 → RAG 컨텍스트로 답변
+    # RAG 경로
     ctx = fetch_topk_by_cosine(question, k=5)
     prompt = build_prompt(question, ctx)
     final = client.chat.completions.create(
@@ -338,34 +355,42 @@ def llm_answer(question: str) -> str:
 # =========================
 # 4) API
 # =========================
-@app.route("/api/chat-search", methods=["POST"])
-def chat_search():
-    data = request.get_json() or {}
-    q = (data.get("query") or "").strip()
+class ChatSearchRequest(BaseModel):
+    query: str
+
+class ChatSearchResponse(BaseModel):
+    id: str
+    type: str
+    role: str
+    content: str
+
+@app.post("/api/chat-search", response_model=ChatSearchResponse)
+def chat_search(req: ChatSearchRequest):
+    q = (req.query or "").strip()
     if not q:
-        return jsonify({"error": "Query is required"}), 400
+        raise HTTPException(status_code=400, detail="Query is required")
 
     if any(w in q for w in OOS_WORDS):
-        return jsonify({
-            "id": f"ai-{uuid4().hex}",
-            "type": "ai",
-            "role": "assistant",
-            "content": "이 서비스는 업로드된 데이터(테이블)에 대한 질문만 답변합니다."
-        })
+        return ChatSearchResponse(
+            id=f"ai-{uuid4().hex}",
+            type="ai",
+            role="assistant",
+            content="이 서비스는 업로드된 데이터(테이블)에 대한 질문만 답변합니다."
+        )
 
     content = llm_answer(q)
-    return jsonify({
-        "id": f"ai-{uuid4().hex}",
-        "type": "ai",
-        "role": "assistant",
-        "content": content
-    })
+    return ChatSearchResponse(
+        id=f"ai-{uuid4().hex}",
+        type="ai",
+        role="assistant",
+        content=content
+    )
 
 # =========================
 # 5) main
 # =========================
 if __name__ == "__main__":
+    import uvicorn
     print(f"🔑 OPENAI_API_KEY loaded? {bool(OPENAI_API_KEY)} | .env: {ENV_PATH}")
     print(f"🧠 EMBED_MODEL: {EMBED_MODEL} | 💬 CHAT_MODEL: {CHAT_MODEL}")
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
+    uvicorn.run("fastapi_server:app", host="0.0.0.0", port=5000, reload=True)
