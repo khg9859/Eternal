@@ -25,8 +25,10 @@ import os
 import numpy as np  # 임베딩 벡터 계산용
 import time
 import torch # [신규] PyTorch
-from transformers import AutoTokenizer, AutoModel # [신규] Transformers
+from transformers import AutoTokenizer, AutoModel
+from dotenv import load_dotenv, find_dotenv 
 
+load_dotenv(find_dotenv())
 # --- 설정 (Configuration) ---
 DB_HOST = os.getenv('DB_HOST','localhost') # 데이터베이스 서버 주소 ##보안을 신경 쓰지 않으면 = DB_HOST='' 식으로 사용가능
 DB_PORT = os.getenv('DB_PORT','5432')    # 데이터베이스 포트

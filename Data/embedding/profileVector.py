@@ -16,8 +16,9 @@ import numpy as np
 import os
 import time
 import json  # JSON 파싱을 위해 임포트
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv 
 
+load_dotenv(find_dotenv())
 # --- 설정 (Configuration) ---
 DB_HOST = os.getenv('DB_HOST','localhost') # 데이터베이스 서버 주소 ##보안을 신경 쓰지 않으면 = DB_HOST='' 식으로 사용가능
 DB_PORT = os.getenv('DB_PORT','5432')    # 데이터베이스 포트
