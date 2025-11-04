@@ -25,7 +25,8 @@
 ## ⚙️ 코드 실행 순서
 
 > ⚠️ *requirements.txt의 모든 파이썬 라이브러리가 이미 설치되어 있다고 가정합니다.*
-> ⚠️ *.env를 작성한 코드에 맞게 추가해주세요.*
+
+> ⚠️ *.env를 작성한 코드에 맞게 추가&수정해주세요.*
 
 
 * DB_HOST =  # 데이터베이스 서버 주소 
@@ -67,6 +68,7 @@ INPUT_FOLDER = os.getenv('INPUT_PATH')
 
 ```bash
 python ./Data/db_insert/insert_all.py
+* ./Data/db_insert/drop_table.py 는 모든 테이블을 DROP하는 코드입니다. insert_all.py 실행시 초기화 목적으로 실행되니 원 DB를 유지 원할 시 이를 주석처리 해야합니다! *
 
 4️⃣ 임베딩 실행
 python ./embedding/embedding.py
