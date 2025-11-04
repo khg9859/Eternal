@@ -28,11 +28,11 @@ import torch # [신규] PyTorch
 from transformers import AutoTokenizer, AutoModel # [신규] Transformers
 
 # --- 설정 (Configuration) ---
-DB_HOST = 'localhost'
-DB_PORT = '5432'
-DB_NAME = 'capstone'
-DB_USER = 'postgres'
-DB_PASSWORD = 'Sjw@040107'
+DB_HOST = os.os.getenv('DB_HOST','localhost') # 데이터베이스 서버 주소
+DB_PORT = os.os.getenv('DB_PORT','5432')    # 데이터베이스 포트
+DB_NAME = os.os.getenv('DB_NAME')   # 연결할 데이터베이스 이름
+DB_USER = os.os.getenv('DB_USER','postgres')   # 데이터베이스 사용자 ID
+DB_PASSWORD = os.os.getenv('DB_PASSWORD')  # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
 
 # [수정] 임베딩 모델의 차원 (KURE-v1은 1024)
 EMBEDDING_DIMENSION = 1024

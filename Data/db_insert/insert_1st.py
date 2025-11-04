@@ -3,22 +3,23 @@
 import psycopg2  # PostgreSQL DB 연결을 위한 라이브러리
 from psycopg2.extras import execute_values  # 대량의 데이터를 효율적으로 삽입하기 위한 헬퍼 함수
 import pandas as pd  # 엑셀(XLSX) 및 CSV 파일을 읽고 데이터를 다루기 위한 라이브러리
-import os  # 파일 및 폴더 경로를 다루기 위한 라이브러리
+
 from datetime import datetime # [신규] 나이 계산을 위해 datetime 임포트
+from dotenv import load_dotenv
+import os  # 파일 및 폴더 경로를 다루기 위한 라이브러리
 
 # [안내] 이 스크립트는 pandas에서 XLSX 파일을 읽기 위해 'open_pyxl' 라이브러리가 필요합니다.
 # 하지만 .csv 파일만 처리하도록 수정되었으므로, .csv 파일만 사용할 경우 'open_pyxl'이 필요하지 않습니다.
-# (psycopg2-binary, pandas는 여전히 필요합니다)
 
 # --- 설정 (Configuration) ---
 # 스크립트 전역에서 사용될 설정 값들을 정의합니다.
 
 # PostgreSQL 데이터베이스 연결 정보
-DB_HOST = 'localhost'  # 데이터베이스 서버 주소
-DB_PORT = '5432'       # 데이터베이스 포트
-DB_NAME = 'capstone'   # 연결할 데이터베이스 이름
-DB_USER = 'postgres'   # 데이터베이스 사용자 ID
-DB_PASSWORD = 'Sjw@040107'  # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
+DB_HOST = os.os.getenv('DB_HOST','localhost') # 데이터베이스 서버 주소
+DB_PORT = os.os.getenv('DB_PORT','5432')    # 데이터베이스 포트
+DB_NAME = os.os.getenv('DB_NAME')   # 연결할 데이터베이스 이름
+DB_USER = os.os.getenv('DB_USER','postgres')   # 데이터베이스 사용자 ID
+DB_PASSWORD = os.os.getenv('DB_PASSWORD')  # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
 
 # 원본 파일들이 들어있는 폴더 경로
 INPUT_FOLDER = 'D:/capstone/Eternal/Data/db_insert/panelData/' 
