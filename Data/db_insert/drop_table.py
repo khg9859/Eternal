@@ -15,11 +15,8 @@ import os
 
 # --- 1. .env 파일 로드 ---
 # .env 파일에서 환경 변수를 로드합니다.
-env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
 
-load_dotenv(dotenv_path=env_path)
-
-
+load_dotenv(find_dotenv())
 
 # --- 2. 설정 (Configuration) ---
 # .env 파일에서 DB 접속 정보를 읽어옵니다.
