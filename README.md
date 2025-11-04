@@ -25,6 +25,18 @@
 ## ⚙️ 코드 실행 순서
 
 > ⚠️ *requirements.txt의 모든 파이썬 라이브러리가 이미 설치되어 있다고 가정합니다.*
+> ⚠️ *.env를 작성한 코드에 맞게 추가해주세요.*
+
+
+* DB_HOST =  # 데이터베이스 서버 주소 ##보안을 신경 쓰지 않으면 = DB_HOST='' 식으로 사용가능
+* DB_PORT =  # 데이터베이스 포트
+* DB_NAME =  # 연결할 데이터베이스 이름
+* DB_USER = # 데이터베이스 사용자 ID
+* DB_PASSWORD = # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
+* INPUT_PATH = # 데이터들이 있는 폴더/디렉터리 경로
+
+# 원본 파일들이 들어있는 폴더 경로
+INPUT_FOLDER = os.getenv('INPUT_PATH')
 
 ---
 
@@ -64,17 +76,3 @@ python ./embedding/profileVector.py
 
 psql 환경에서 데이터가 정상적으로 삽입되고
 임베딩(p_vector, a_vector, q_vector)이 잘 생성되었는지 확인합니다.
-
-✅ 요약 실행 플로우
-# 1. 데이터 준비
-cp ./execptFile/*.xlsx ./Data/db_insert/panelData/
-
-# 2. 경로 및 DB 설정 수정
-# 3. 데이터 삽입
-python ./Data/db_insert/insert_all.py
-
-# 4. 임베딩 실행
-python ./embedding/embedding.py
-python ./embedding/profileVector.py
-
-# 5. DB 검수 (psql)
