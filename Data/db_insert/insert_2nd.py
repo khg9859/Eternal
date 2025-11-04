@@ -9,11 +9,11 @@ from dotenv import load_dotenv
 
 
 # --- 설정 (Configuration) ---
-DB_HOST = os.os.getenv('DB_HOST','localhost') # 데이터베이스 서버 주소
-DB_PORT = os.os.getenv('DB_PORT','5432')    # 데이터베이스 포트
-DB_NAME = os.os.getenv('DB_NAME')   # 연결할 데이터베이스 이름
-DB_USER = os.os.getenv('DB_USER','postgres')   # 데이터베이스 사용자 ID
-DB_PASSWORD = os.os.getenv('DB_PASSWORD')  # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
+DB_HOST = os.getenv('DB_HOST','localhost') # 데이터베이스 서버 주소 ##보안을 신경 쓰지 않으면 = DB_HOST='' 식으로 사용가능
+DB_PORT = os.getenv('DB_PORT','5432')    # 데이터베이스 포트
+DB_NAME = os.getenv('DB_NAME')   # 연결할 데이터베이스 이름
+DB_USER = os.getenv('DB_USER','postgres')   # 데이터베이스 사용자 ID
+DB_PASSWORD = os.getenv('DB_PASSWORD')  # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
 
 INPUT_FOLDER = 'D:/capstone/Eternal/Data/db_insert/panelData/'
 DATA_FILE = 'wel_2ndex.csv'
