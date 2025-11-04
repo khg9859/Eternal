@@ -23,7 +23,7 @@ DB_USER = os.getenv('DB_USER','postgres')   # 데이터베이스 사용자 ID
 DB_PASSWORD = os.getenv('DB_PASSWORD')  # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
 
 # 원본 XLSX 파일들이 들어있는 폴더 경로
-INPUT_FOLDER = 'D:/capstone/Eternal/Data/db_insert/panelData/' 
+INPUT_FOLDER = os.getenv('INPUT_PATH')
 
 # 마스터 테이블 이름 정의
 RESPONDENTS_TABLE = 'respondents' # 응답자 고유 ID와 프로필 벡터를 저장할 테이블

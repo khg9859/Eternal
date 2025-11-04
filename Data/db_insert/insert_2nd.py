@@ -15,7 +15,7 @@ DB_NAME = os.getenv('DB_NAME')   # 연결할 데이터베이스 이름
 DB_USER = os.getenv('DB_USER','postgres')   # 데이터베이스 사용자 ID
 DB_PASSWORD = os.getenv('DB_PASSWORD')  # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
 
-INPUT_FOLDER = 'D:/capstone/Eternal/Data/db_insert/panelData/'
+INPUT_FOLDER = os.getenv('INPUT_PATH')
 DATA_FILE = 'wel_2ndex.csv'
 CODEBOOK_FILE = 'welcome_2nd_codebook.csv'
 PREFIX = 'w2_' # Welcome 2nd의 고유 접두사
