@@ -24,15 +24,10 @@ const SearchResults = ({ results, query, isLoading }) => {
       {/* 검색 결과 목록 */}
       <div className="space-y-6">
         {results.map((result, index) => (
-          <div key={result.id || index} className="group relative">
-            {result.similarity && (
-              <div className="absolute top-2 right-2 bg-blue-100 text-blue-800 text-xs font-semibold px-2.5 py-1 rounded-full">
-                유사도: {(result.similarity * 100).toFixed(1)}%
-              </div>
-            )}
+          <div key={result.id || index} className="group">
             {/* 결과 헤더 */}
             <div className="mb-2">
-              <h3 className="text-xl text-google-blue hover:underline cursor-pointer group-hover:underline pr-24">
+              <h3 className="text-xl text-google-blue hover:underline cursor-pointer group-hover:underline">
                 {result.title}
               </h3>
               <div className="text-sm text-green-700">

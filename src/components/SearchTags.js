@@ -1,6 +1,6 @@
 import React from 'react';
 
-const SearchTags = ({ onTagClick }) => {
+const SearchTags = ({ onTagClick, disabled }) => {
   const popularTags = [
     { text: '매출 데이터', icon: '💰' },
     { text: '고객 정보', icon: '👥' },
@@ -26,10 +26,13 @@ const SearchTags = ({ onTagClick }) => {
       <div className="flex flex-wrap justify-center gap-3 px-4">
         {popularTags.map((tag, index) => (
           <button
-            key={tag.text}
-            onClick={() => onTagClick(tag.text)}
-            className={`group inline-flex items-center px-5 py-2.5 rounded-full text-sm font-medium transition-all duration-300 
-               'bg-white/80 backdrop-blur-sm text-gray-700 hover:bg-gradient-to-r hover:from-google-blue/10 hover:to-google-purple/10 hover:text-google-blue hover:shadow-xl hover:scale-105 border border-gray-200/50 hover:border-google-blue/30 shadow-sm'
+            key={index}
+            onClick={() => !disabled && onTagClick(tag.text)}
+            disabled={disabled}
+            className={`group inline-flex items-center px-5 py-2.5 rounded-full text-sm font-medium transition-all duration-300 ${
+              disabled 
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                : 'bg-white/80 backdrop-blur-sm text-gray-700 hover:bg-gradient-to-r hover:from-google-blue/10 hover:to-google-purple/10 hover:text-google-blue hover:shadow-xl hover:scale-105 border border-gray-200/50 hover:border-google-blue/30 shadow-sm'
             }`}
           >
             <span className="mr-2 text-base group-hover:scale-110 transition-transform duration-200">{tag.icon}</span>
