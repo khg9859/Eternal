@@ -22,7 +22,7 @@ function App() {
   const [showVisualization, setShowVisualization] = useState(false);
   const [activeFilters, setActiveFilters] = useState({});
 
-  // 'simple' = AI Search(차트/RAG), 'chat' = Text Search(챗봇)
+  // 'simple' = Text Search(차트/RAG), 'chat' = AI Search(챗봇)
   const [interfaceMode, setInterfaceMode] = useState('simple');
   // 'home' | 'results' | 'chat'
   const [currentPage, setCurrentPage] = useState('home');
@@ -54,7 +54,7 @@ function App() {
 
     try {
       if (interfaceMode === 'simple') {
-        // ✅ AI Search → RAG 사용 (LLMlangchan.py)
+        // ✅ Text Search → RAG 사용 (LLMlangchan.py)
         const response = await fetch(`${API_BASE_URL}/rag/search`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -84,7 +84,7 @@ function App() {
         setSearchResults(results);
 
       } else {
-        // ✅ Text Search → RAG 기반 챗봇 대화로 변경
+        // ✅ AI Search → RAG 기반 챗봇 대화로 변경
         // 유저 메시지 추가
         setMessages(prev => [...prev, { role: 'user', text: query }]);
 
@@ -241,9 +241,9 @@ function App() {
                   <div className="mb-6 flex justify-center">
                     <div className="bg-gray-800/80 backdrop-blur-sm rounded-xl p-1 border border-gray-600/50">
                       <button
-                        onClick={() => { setInterfaceMode('simple'); setCurrentPage('home'); }}
+                        onClick={() => { setInterfaceMode('chat'); setCurrentPage('chat'); }}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                          interfaceMode === 'simple'
+                          interfaceMode === 'chat'
                             ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
                             : 'text-gray-300 hover:text-white'
                         }`}
@@ -251,9 +251,9 @@ function App() {
                         🔍 AI Search
                       </button>
                       <button
-                        onClick={() => { setInterfaceMode('chat'); setCurrentPage('chat'); }}
+                        onClick={() => { setInterfaceMode('simple'); setCurrentPage('home'); }}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                          interfaceMode === 'chat'
+                          interfaceMode === 'simple'
                             ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
                             : 'text-gray-300 hover:text-white'
                         }`}
@@ -314,7 +314,7 @@ function App() {
           >
             Eternel
           </button>
-          <div className="text-gray-400 text-sm">Text Search · 챗봇</div>
+          <div className="text-gray-400 text-sm">AI Search · 챗봇</div>
           <button
             onClick={() => { setInterfaceMode('simple'); setCurrentPage('home'); }}
             className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg transition-colors border border-gray-600"
