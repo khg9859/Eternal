@@ -19,7 +19,6 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const [showVisualization, setShowVisualization] = useState(false);
   const [activeFilters, setActiveFilters] = useState({});
 
   // 'simple' = Text Search(차트/RAG), 'chat' = AI Search(챗봇)
@@ -194,7 +193,6 @@ function App() {
     setSearchQuery('');
     setSearchResults([]);
     setIsLoading(false);
-    setShowVisualization(false);
     setActiveFilters({});
     setMessages([]);
     setInterfaceMode('simple');

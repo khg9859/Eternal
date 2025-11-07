@@ -11,7 +11,7 @@ import json
 from typing import List, Optional
 import numpy as np
 
-from LLMlangchan import rag_answer
+from LLMlangchan import rag_search_with_sources
 
 app = FastAPI(title="Eternel API", description="자연어 질의 기반 패널 데이터 검색 API")
 
@@ -35,7 +35,6 @@ DB_CONFIG = {
 class RAGRequest(BaseModel):
     query: str
     session_id: Optional[str] = "web_default_session"
-    mode: Optional[str] = "conv"  # "simple" or "conv"
 # Pydantic 모델들
 class SearchRequest(BaseModel):
     query: str
@@ -170,22 +169,23 @@ async def get_respondents(limit: int = 10):
 @app.post("/rag/search")
 async def rag_search(req: RAGRequest):
     """
-    LLMlangchan 기반 RAG 검색 엔드포인트
+    LLMlangchan 기반 RAG 검색 엔드포인트 (대화형 모드 고정)
     - query: 자연어 질의
-    - session_id: 대화 세션 식별자(대화형 모드에서 맥락 유지)
-    - mode: "simple" (단발성) | "conv" (대화형)
+    - session_id: 대화 세션 식별자
     """
     try:
-        answer = rag_answer(req.query, req.session_id, req.mode)
-        # 프론트의 카드/결과 뷰에 넣기 쉬운 구조로 반환
+        # 항상 'conv' 모드로 답변과 소스 문서를 함께 받아옴
+        result = rag_search_with_sources(req.query, req.session_id, mode="conv")
+        
+        # 프론트엔드에 필요한 모든 정보를 포함하여 반환
         return {
             "query": req.query,
-            "mode": req.mode,
             "session_id": req.session_id,
-            "answer": answer
+            "answer": result.get("answer"),
+            "sources": result.get("sources", [])
         }
     except Exception as e:
-        print(f"!!! /rag/search ENDPOINT ERROR: {e}") # 오류 출력 추가
+        print(f"!!! /rag/search ENDPOINT ERROR: {e}")
         raise HTTPException(status_code=500, detail=f"RAG 검색 실패: {str(e)}")
 
 @app.post("/search/questions")

@@ -96,6 +96,29 @@ def format_docs(docs):
 # 툴콜에 필요한 OpenAI 클라이언트 (재순위 지정에도 사용)
 openai_client = ChatOpenAI(model=OPENAI_RERANKER_MODEL, temperature=0.0)
 
+def extract_profile_query(query: str) -> str:
+    """LLM을 사용해 전체 질문에서 프로필 관련 키워드만 추출합니다."""
+    
+    profile_extraction_prompt = f"""사용자의 전체 질문에서 '사람'의 특징을 설명하는 핵심 키워드만 추출하여 간결한 구(phrase)로 만들어주세요. 다른 설명은 절대 추가하지 마세요.
+
+질문: "서울에 사는 성인 남성은 보통 건강을 위해 어떤 운동을 많이 해?"
+출력: 서울 거주 성인 남성
+
+질문: "부산에 사는 20대 여성 중, OTT를 유료 구독하는 사람"
+출력: 부산 거주 20대 여성
+
+질문: "{query}"
+출력:"""
+
+    try:
+        response = openai_client.invoke(profile_extraction_prompt)
+        profile_query = response.content.strip()
+        # LLM이 혹시 따옴표를 붙여서 출력할 경우를 대비해 제거
+        return profile_query.replace('"', '')
+    except Exception as e:
+        print(f"[WARN] 프로필 쿼리 추출 실패: {e}. 원본 쿼리를 대신 사용합니다.")
+        return query # 실패 시 원본 쿼리 사용
+
 # 2.1. 재순위 지정(Re-ranking) 함수 정의
 def rerank_with_openai(query: str, retrieved_docs: List[Any], final_k: int = FINAL_K) -> List[Any]:
     """
@@ -155,28 +178,84 @@ def rerank_with_openai(query: str, retrieved_docs: List[Any], final_k: int = FIN
         return retrieved_docs[:final_k]
 
 
-# 2.2. 사용자 정의 Retriever 함수 (1차 KURE 검색 후 OpenAI 재순위 지정)
-def get_hybrid_retriever(query: str):
-    """KURE 검색 후 OpenAI 재순위 지정"""
-    docs_to_rerank = retriever.invoke(query, search_kwargs={"k": RETRIEVAL_K})
-    final_docs = rerank_with_openai(query, docs_to_rerank, final_k=FINAL_K)  # ← 함수명 통일
+# 2.2. 사용자 정의 Retriever 함수 (0->1->2->3 Stage)
+def get_multistage_retriever(query: str):
+    """(0)프로필추출 -> (1)profile_vector -> (2)q_vector -> (3)a_vector를 모두 사용하는 최종 Retriever"""
+    print(f"\n[DEBUG] 전체 검색 프로세스 시작. 원본 쿼리: {query}")
+
+    # 0단계: 사용자 질문에서 프로필 검색어 추출
+    profile_query = extract_profile_query(query)
+    print(f"[DEBUG] 0단계: 프로필 검색어 추출 완료: '{profile_query}'")
+
+    # 1단계: profile_vector로 관련성 높은 응답자 후보군(mb_sn) 추출
+    candidate_docs = profile_retriever.invoke(profile_query) # 추출된 프로필 쿼리 사용
+    candidate_mb_sn_set = set([doc.metadata.get('mb_sn') for doc in candidate_docs if 'mb_sn' in doc.metadata])
+    if not candidate_mb_sn_set:
+        print("[DEBUG] 1단계: 관련 응답자 후보군을 찾지 못했습니다.")
+        return []
+    print(f"[DEBUG] 1단계: 응답자 후보군 {len(candidate_mb_sn_set)}명 발견.")
+
+    # 2단계: q_vector로 가장 관련성 높은 설문 문항(question_id) 추출
+    relevant_question_docs = q_retriever.invoke(query) # 여기서는 원본 쿼리 사용
+    if not relevant_question_docs:
+        print("[DEBUG] 2단계: 관련 설문 문항을 찾지 못했습니다.")
+        return []
+    question_id = relevant_question_docs[0].metadata.get('codebook_id')
+    if not question_id:
+        print("[DEBUG] 2단계: 설문 문항의 ID(codebook_id)를 찾지 못했습니다.")
+        return []
+    print(f"[DEBUG] 2단계: 관련 설문 문항 ID '{question_id}' 발견.")
+
+    # 3단계: a_vector 검색 (question_id로 1차 필터링)
+    a_retriever = a_vectorstore.as_retriever(
+        search_kwargs={
+            "k": 100, # 더 많은 후보군을 가져와서 수동 필터링
+            "filter": { "question_id": question_id }
+        }
+    )
+    docs_for_manual_filter = a_retriever.invoke(query) # 여기서는 원본 쿼리 사용
+    
+    # 3.5단계: 응답자 후보군(mb_sn)으로 2차 수동 필터링
+    final_docs_to_rerank = [doc for doc in docs_for_manual_filter if doc.metadata.get('mb_sn') in candidate_mb_sn_set]
+    print(f"[DEBUG] 3단계: 최종 필터링 후 {len(final_docs_to_rerank)}개 문서 확보.")
+
+    # 4단계: OpenAI로 최종 K개 재정렬
+    final_docs = rerank_with_openai(query, final_docs_to_rerank, final_k=FINAL_K)
+    print(f"[DEBUG] 4단계: 재정렬 후 최종 {len(final_docs)}개 문서 반환.")
+    
     return final_docs
 
 
-# 2.3. RAG 체인 객체 구축 (try/except 블록 유지)
+# 2.3. RAG 체인 객체 구축 (2-Stage Retrieval)
 try:
     if not CONNECTION_STRING:
         raise RuntimeError("PG_CONNECTION_STRING 환경 변수가 설정되지 않았습니다.")
 
     embedding_function = get_kure_embedding()
     
-    vectorstore = PGVector(
-        collection_name=COLLECTION_NAME,
+    # profile_vector 저장소: 응답자 후보군 추출용
+    profile_vectorstore = PGVector(
+        collection_name="respondents",
         connection_string=CONNECTION_STRING,
-        embedding_function=embedding_function
+        embedding_function=embedding_function,
     )
-    # 기존 retriever 객체는 1차 검색에만 사용됨
-    retriever = vectorstore.as_retriever(search_kwargs={"k": RETRIEVAL_K}) 
+    # q_vector 저장소: 질문 의도 파악용
+    q_vectorstore = PGVector(
+        collection_name="codebooks",
+        connection_string=CONNECTION_STRING,
+        embedding_function=embedding_function,
+    )
+    # a_vector 저장소: 상세 답변 검색용
+    a_vectorstore = PGVector(
+        collection_name="answers",
+        connection_string=CONNECTION_STRING,
+        embedding_function=embedding_function,
+    )
+    
+    # 1단계 검색용 profile_vector retriever
+    profile_retriever = profile_vectorstore.as_retriever(search_kwargs={"k": 50}) # 50명 후보군
+    # 2단계 검색용 q_vector retriever
+    q_retriever = q_vectorstore.as_retriever(search_kwargs={"k": 1}) # 관련 질문 1개
 
 except RuntimeError as e:
     print(f"XXX PGVector 설정 오류: {e}")
@@ -190,7 +269,7 @@ except Exception as e:
 core_rag_chain = (
     {
         # 최종 문서를 문자열 컨텍스트로 포맷해서 프롬프트에 투입
-        "context": lambda x: format_docs(get_hybrid_retriever(x['question'])),
+        "context": lambda x: format_docs(get_multistage_retriever(x['question'])),
         "question": lambda x: x['question'],
         "history": lambda x: x['history']
     }
@@ -209,6 +288,31 @@ def rag_answer(query: str, session_id: str, mode: str = "conv") -> str:
             return final_rag_chain.invoke({"question": query}, config=config)
     except Exception as e:
         return f"[오류] 서버 실행 오류: {e}"
+
+def rag_search_with_sources(query: str, session_id: str, mode: str = "conv") -> dict:
+    """
+    RAG 검색을 수행하고, 생성된 답변과 함께 참조된 소스 문서를 반환합니다.
+    """
+    # 1. 답변 생성 (기존 로직 재사용)
+    answer = rag_answer(query, session_id, mode)
+
+    # 답변 생성 중 오류가 발생했으면, 소스 검색 없이 바로 반환
+    if isinstance(answer, str) and answer.startswith("[오류]"):
+        return {"answer": answer, "sources": []}
+    
+    # 2. 소스 문서 검색 (새로운 2단계 검색 함수 호출)
+    sources = get_multistage_retriever(query)
+    
+    # Document 객체를 JSON으로 직렬화 가능한 형태로 변환
+    formatted_sources = []
+    for doc in sources:
+        formatted_sources.append({
+            "page_content": doc.page_content,
+            "metadata": doc.metadata
+        })
+
+    return {"answer": answer, "sources": formatted_sources}
+
 
 # 2.5. final_rag_chain 정의 (대화형 검색의 최종 체인)
 final_rag_chain = RunnableWithMessageHistory(

@@ -3,9 +3,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 const AdvancedChart = ({ query, filters = {} }) => {
   const [selectedField, setSelectedField] = useState('');
   const [groupBy, setGroupBy] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [showAllCharts, setShowAllCharts] = useState(true); // 모든 차트 표시 여부
-  const [singleChartType, setSingleChartType] = useState('bar'); // 단일 차트 모드에서의 차트 타입
   const [apiData, setApiData] = useState([]);
   const [animationTrigger, setAnimationTrigger] = useState(0); // 애니메이션 트리거
   const [isAnimating, setIsAnimating] = useState(false);
@@ -13,59 +10,53 @@ const AdvancedChart = ({ query, filters = {} }) => {
 
   // API에서 데이터 가져오기
   useEffect(() => {
+    const generateDummyApiData = (query) => {
+      const dummyData = [];
+      
+      for (let i = 0; i < 20; i++) {
+        dummyData.push({
+          q_title: `${query} 관련 질문 ${i + 1}`,
+          codebook_id: `dummy_${i}`,
+          answers: [
+            { answer: `답변 ${i + 1}-1`, count: Math.floor(Math.random() * 50) + 10 },
+            { answer: `답변 ${i + 1}-2`, count: Math.floor(Math.random() * 30) + 5 }
+          ]
+        });
+      }
+      
+      return dummyData;
+    };
+
+    const fetchApiData = async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/search/questions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query: query,
+            limit: 100
+          })
+        });
+  
+        if (response.ok) {
+          const data = await response.json();
+          setApiData(data.results);
+        } else {
+          // API 실패 시 더미 데이터 사용
+          setApiData(generateDummyApiData(query));
+        }
+      } catch (error) {
+        console.error('API fetch failed:', error);
+        setApiData(generateDummyApiData(query));
+      }
+    };
+
     if (query) {
       fetchApiData();
     }
   }, [query]);
-
-
-
-  const fetchApiData = async () => {
-    setIsLoading(true);
-    try {
-      const response = await fetch(`http://localhost:8000/search/questions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: query,
-          limit: 100
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setApiData(data.results);
-      } else {
-        // API 실패 시 더미 데이터 사용
-        setApiData(generateDummyApiData(query));
-      }
-    } catch (error) {
-      console.error('API fetch failed:', error);
-      setApiData(generateDummyApiData(query));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const generateDummyApiData = (query) => {
-    const keywords = query.toLowerCase();
-    const dummyData = [];
-    
-    for (let i = 0; i < 20; i++) {
-      dummyData.push({
-        q_title: `${query} 관련 질문 ${i + 1}`,
-        codebook_id: `dummy_${i}`,
-        answers: [
-          { answer: `답변 ${i + 1}-1`, count: Math.floor(Math.random() * 50) + 10 },
-          { answer: `답변 ${i + 1}-2`, count: Math.floor(Math.random() * 30) + 5 }
-        ]
-      });
-    }
-    
-    return dummyData;
-  };
 
   // 데이터 분석 및 필드 추출
   const { numericFields, textFields, processedData } = useMemo(() => {
