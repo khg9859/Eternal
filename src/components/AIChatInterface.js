@@ -91,36 +91,45 @@ const AIChatInterface = ({ uploadedData, searchQuery, onNewSearch }) => {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const query = inputMessage.trim();
     setInputMessage('');
     setIsLoading(true);
 
-    // 검색 실행 (필요한 경우)
-    if (onNewSearch) {
-      onNewSearch(userMessage.content);
-    }
-
     try {
-      // AI 응답 생성 (실제 API 호출 지점)
-      const aiResponse = await generateAIResponse(userMessage.content);
+      // RAG 백엔드 호출
+      const response = await fetch('http://localhost:8000/rag/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          session_id: 'popup_chat_session', // 팝업 전용 세션 ID
+          mode: 'conv'
+        })
+      });
+
+      if (!response.ok) throw new Error(`RAG 검색 실패: ${response.status}`);
+      const data = await response.json();
+
+      // AI 답변 추가
+      const aiMessage = {
+        id: Date.now() + 1,
+        type: 'ai',
+        content: data.answer || '답변을 생성할 수 없습니다.',
+        timestamp: new Date()
+      };
       
-      setTimeout(() => {
-        const aiMessage = {
-          id: Date.now() + 1,
-          type: 'ai',
-          content: aiResponse,
-          timestamp: new Date()
-        };
-        
-        setMessages(prev => [...prev, aiMessage]);
-        setIsLoading(false);
-      }, 1000 + Math.random() * 1000); // 1-2초 지연으로 자연스러운 응답
+      setMessages(prev => [...prev, aiMessage]);
+      setIsLoading(false);
       
     } catch (error) {
       console.error('AI 응답 생성 오류:', error);
+      
+      // 백엔드 연결 실패 시 시뮬레이션 응답 사용
+      const aiResponse = await generateAIResponse(query);
       const errorMessage = {
         id: Date.now() + 1,
         type: 'ai',
-        content: '죄송합니다. 일시적인 오류가 발생했습니다. 다시 시도해주세요.',
+        content: aiResponse,
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -151,11 +160,11 @@ const AIChatInterface = ({ uploadedData, searchQuery, onNewSearch }) => {
   ];
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-transparent">
       {/* 헤더는 팝업에서 처리하므로 제거 */}
 
       {/* 메시지 영역 */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-transparent">
         {messages.map((message) => (
           <div
             key={message.id}
@@ -197,7 +206,7 @@ const AIChatInterface = ({ uploadedData, searchQuery, onNewSearch }) => {
 
       {/* 추천 질문 (메시지가 적을 때만 표시) */}
       {messages.length <= 2 && (
-        <div className="px-6 py-4 border-t border-gray-600/50">
+        <div className="px-6 py-4 border-t border-gray-600/50 bg-transparent">
           <p className="text-sm text-gray-400 mb-3">💡 이런 질문을 해보세요:</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {suggestedQuestions.map((question, index) => (
@@ -214,7 +223,7 @@ const AIChatInterface = ({ uploadedData, searchQuery, onNewSearch }) => {
       )}
 
       {/* 입력 영역 */}
-      <div className="p-6 border-t border-gray-600/50">
+      <div className="p-6 border-t border-gray-600/50 bg-transparent">
         <div className="flex items-end space-x-2">
           <div className="flex-1">
             <textarea
