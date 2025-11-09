@@ -6,6 +6,8 @@ const AdvancedChart = ({ query, filters = {} }) => {
   const [apiData, setApiData] = useState([]);
   const [animationTrigger, setAnimationTrigger] = useState(0); // 애니메이션 트리거
   const [isAnimating, setIsAnimating] = useState(false);
+  const [showAllCharts, setShowAllCharts] = useState(true); // 모든 차트 표시 여부
+  const [singleChartType, setSingleChartType] = useState('bar'); // 단일 차트 타입
   const chartRef = useRef(null);
 
   // API에서 데이터 가져오기

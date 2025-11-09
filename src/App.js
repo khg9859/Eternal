@@ -239,7 +239,11 @@ function App() {
                   <div className="mb-6 flex justify-center">
                     <div className="bg-gray-800/80 backdrop-blur-sm rounded-xl p-1 border border-gray-600/50">
                       <button
-                        onClick={() => { setInterfaceMode('chat'); setCurrentPage('chat'); }}
+                        onClick={() => { 
+                          setInterfaceMode('chat'); 
+                          setMessages([]);
+                          setCurrentPage('chat'); 
+                        }}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
                           interfaceMode === 'chat'
                             ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
@@ -261,34 +265,25 @@ function App() {
                     </div>
                   </div>
 
-                  {/* 검색/챗 UI 프리뷰 */}
-                  {interfaceMode === 'simple' ? (
-                    <>
-                      <div className="mb-6">
-                        <SearchBox
-                          onSearch={handleSearch}
-                          isLoading={isLoading}
-                          placeholder="질문이나 키워드를 입력하세요... (예: 체력 관리, 결혼 상태)"
-                        />
-                      </div>
-                      {!isLoading && (
-                        <div className="flex flex-wrap justify-center gap-2">
-                          {['💰 체력 관리', '👥 결혼 상태', '📊 나이', '📈 지역'].map((tag, idx) => (
-                            <button
-                              key={idx}
-                              onClick={() => handleTagClick(tag.replace(/[💰👥📊📈]\s/, ''))}
-                              className="px-3 py-1.5 bg-gray-800/50 backdrop-blur-sm text-gray-300 rounded-full text-xs hover:bg-gray-700/50 transition-all duration-200 border border-gray-600/30 hover:border-purple-500/50"
-                            >
-                              {tag}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="h-80 overflow-hidden">
-                      {/* 홈 프리뷰용 미니 챗 입력창 */}
-                      <ChatInterface onSearch={(q) => handleSearch(q)} isLoading={isLoading} />
+                  {/* 검색 UI만 표시 (AI Search는 별도 페이지로 이동) */}
+                  <div className="mb-6">
+                    <SearchBox
+                      onSearch={handleSearch}
+                      isLoading={isLoading}
+                      placeholder="질문이나 키워드를 입력하세요... (예: 체력 관리, 결혼 상태)"
+                    />
+                  </div>
+                  {!isLoading && (
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {['💰 체력 관리', '👥 결혼 상태', '📊 나이', '📈 지역'].map((tag, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => handleTagClick(tag.replace(/[💰👥📊📈]\s/, ''))}
+                          className="px-3 py-1.5 bg-gray-800/50 backdrop-blur-sm text-gray-300 rounded-full text-xs hover:bg-gray-700/50 transition-all duration-200 border border-gray-600/30 hover:border-purple-500/50"
+                        >
+                          {tag}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </>
@@ -300,48 +295,155 @@ function App() {
     </div>
   );
 
-  // 챗 페이지 (Text Search 전용 전체 화면)
+  // 챗봇 이력 상태
+  const [chatHistory, setChatHistory] = useState([
+    { id: 1, title: 'AI 어시스턴트', lastMessage: '안녕하세요!', time: '방금', active: true }
+  ]);
+  const [activeChatId, setActiveChatId] = useState(1);
+
+  // 챗 페이지 (카카오톡 스타일)
   const renderChatPage = () => (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
-      {/* 헤더 */}
-      <div className="sticky top-0 z-50 bg-gray-900/80 backdrop-blur-sm border-b border-gray-700/50">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
-          <button
-            onClick={resetToHome}
-            className="text-2xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-blue-400 bg-clip-text text-transparent hover:opacity-80 transition-opacity"
-          >
-            Eternel
-          </button>
-          <div className="text-gray-400 text-sm">AI Search · 챗봇</div>
-          <button
-            onClick={() => { setInterfaceMode('simple'); setCurrentPage('home'); }}
-            className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg transition-colors border border-gray-600"
-          >
-            🏠 홈으로
-          </button>
-        </div>
+    <div className="h-screen flex flex-col bg-[#B2C7D9]">
+      {/* 상단 헤더 */}
+      <div className="bg-[#A8B8C8] border-b border-[#8FA3B5] px-4 py-3 flex items-center justify-between">
+        <button
+          onClick={resetToHome}
+          className="text-xl font-bold text-[#3C1E1E] hover:opacity-80 transition-opacity"
+        >
+          Eternel
+        </button>
+        <div className="text-[#3C1E1E] text-sm font-medium">AI Search</div>
+        <button
+          onClick={() => { setInterfaceMode('simple'); setCurrentPage('home'); }}
+          className="px-3 py-1.5 bg-white/80 hover:bg-white text-[#3C1E1E] rounded text-sm transition-colors"
+        >
+          🏠 홈으로
+        </button>
       </div>
 
-      {/* 본문 */}
-      <div className="max-w-5xl mx-auto px-4 py-6">
-        <div className="bg-gray-800/50 rounded-xl border border-gray-600/50 p-4">
-          {/* 메시지 로그 */}
+      {/* 메인 컨텐츠 */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* 왼쪽 사이드바 - 채팅 이력 */}
+        <div className="w-80 bg-[#A8B8C8] border-r border-[#8FA3B5] flex flex-col">
+          {/* 사이드바 헤더 */}
+          <div className="p-4 border-b border-[#8FA3B5]">
+            <h2 className="text-lg font-bold text-[#3C1E1E]">채팅</h2>
+          </div>
+
+          {/* 채팅 목록 */}
+          <div className="flex-1 overflow-y-auto">
+            {chatHistory.map((chat) => (
+              <button
+                key={chat.id}
+                onClick={() => setActiveChatId(chat.id)}
+                className={`w-full p-4 border-b border-[#8FA3B5] hover:bg-[#9DAAB8] transition-colors text-left ${
+                  chat.active ? 'bg-[#9DAAB8]' : ''
+                }`}
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="w-12 h-12 bg-[#FFE812] rounded-full flex items-center justify-center flex-shrink-0">
+                    <span className="text-2xl">🤖</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-semibold text-[#3C1E1E] text-sm">{chat.title}</span>
+                      <span className="text-xs text-[#5C5C5C]">{chat.time}</span>
+                    </div>
+                    <p className="text-sm text-[#5C5C5C] truncate">{chat.lastMessage}</p>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* 새 채팅 버튼 */}
+          <div className="p-4 border-t border-[#8FA3B5]">
+            <button
+              onClick={() => {
+                const newId = chatHistory.length + 1;
+                setChatHistory([
+                  { id: newId, title: `새 대화 ${newId}`, lastMessage: '대화를 시작하세요', time: '방금', active: true },
+                  ...chatHistory.map(c => ({ ...c, active: false }))
+                ]);
+                setActiveChatId(newId);
+                setMessages([]);
+              }}
+              className="w-full px-4 py-2 bg-[#FFE812] hover:bg-[#FFD700] text-[#3C1E1E] rounded-lg font-medium transition-colors"
+            >
+              ➕ 새 채팅
+            </button>
+          </div>
+        </div>
+
+        {/* 오른쪽 채팅 영역 */}
+        <div className="flex-1 flex flex-col bg-[#B2C7D9]">
+          {/* 채팅방 헤더 */}
+          <div className="bg-[#A8B8C8] border-b border-[#8FA3B5] px-6 py-4">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-[#FFE812] rounded-full flex items-center justify-center">
+                <span className="text-xl">🤖</span>
+              </div>
+              <div>
+                <h3 className="font-bold text-[#3C1E1E]">AI 데이터 어시스턴트</h3>
+                <p className="text-xs text-[#5C5C5C]">452개 질문, 115개 답변 준비완료</p>
+              </div>
+            </div>
+          </div>
+
+          {/* 메시지 영역 */}
           <div
             ref={chatScrollRef}
-            className="h-[480px] overflow-y-auto rounded-xl p-4 bg-[#121424] border border-[#2a2e45]"
+            className="flex-1 overflow-y-auto p-4 space-y-2"
+            style={{
+              backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 35px, rgba(255,255,255,.03) 35px, rgba(255,255,255,.03) 36px)'
+            }}
           >
+            {messages.length === 0 && (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <div className="w-20 h-20 bg-[#FFE812] rounded-full flex items-center justify-center mx-auto mb-4">
+                    <span className="text-4xl">💬</span>
+                  </div>
+                  <p className="text-[#5C5C5C] text-sm">데이터에 대해 궁금한 점을 물어보세요!</p>
+                </div>
+              </div>
+            )}
+            
             {messages.map((m, i) => (
-              <div key={i} className={`mb-3 ${m.role === 'user' ? 'text-right' : 'text-left'}`}>
-                <div className={`inline-block px-3 py-2 rounded-2xl ${m.role === 'user' ? 'bg-[#6f4bd8]' : 'bg-[#1b1f36]'}`}>
-                  <pre className="whitespace-pre-wrap text-sm">{m.text}</pre>
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} mb-2`}>
+                {m.role === 'assistant' && (
+                  <div className="w-10 h-10 bg-[#FFE812] rounded-full flex items-center justify-center mr-2 flex-shrink-0">
+                    <span className="text-lg">🤖</span>
+                  </div>
+                )}
+                <div className={`max-w-md px-4 py-2 rounded-lg ${
+                  m.role === 'user' 
+                    ? 'bg-[#FFE812] text-[#3C1E1E]' 
+                    : 'bg-white text-[#3C1E1E]'
+                }`}>
+                  <pre className="whitespace-pre-wrap text-sm font-sans">{m.text}</pre>
                 </div>
               </div>
             ))}
-            {isLoading && <div className="text-xs opacity-70">생각 중…</div>}
+            
+            {isLoading && (
+              <div className="flex justify-start mb-2">
+                <div className="w-10 h-10 bg-[#FFE812] rounded-full flex items-center justify-center mr-2">
+                  <span className="text-lg">🤖</span>
+                </div>
+                <div className="bg-white px-4 py-2 rounded-lg">
+                  <div className="flex space-x-1">
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* 입력창: 기존 ChatInterface 재사용 */}
-          <div className="mt-3">
+          {/* 입력 영역 */}
+          <div className="bg-[#A8B8C8] border-t border-[#8FA3B5] p-4">
             <ChatInterface onSearch={(q) => handleSearch(q)} isLoading={isLoading} />
           </div>
         </div>
@@ -562,10 +664,6 @@ function App() {
             <div className="bg-gray-900/95 backdrop-blur-sm rounded-xl border border-gray-600/50 h-full pt-20">
               <AIChatInterface
                 searchQuery={searchQuery}
-                onNewSearch={(query) => {
-                  handleSearch(query);
-                  setShowChatPopup(false);
-                }}
               />
             </div>
           </div>
