@@ -80,9 +80,11 @@ python ./embedding/profileVector.py
 psql 환경에서 데이터가 정상적으로 삽입되고
 임베딩(p_vector, a_vector, q_vector)이 잘 생성되었는지 확인합니다.
 
+```
+
 ### 6️⃣ 다중 조건 필터 & 의미기반 질의(semantic query) 파싱 기능
 테스트 
-``` bash
+```bash
 python ./Data/search/parsing.py
 
 * 예시로 들어간 테스트 문이 json화 된 필터:json 와 질의: str를 분리하여 반환함.* 
@@ -120,3 +122,4 @@ python ./Data/search/parsing.py
     }
   ],
   "semantic_query": "문화생활 만족도"
+```
