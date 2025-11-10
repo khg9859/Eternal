@@ -73,6 +73,8 @@ DB_PASSWORD = os.getenv('DB_PASSWORD') # (필수 값이므로 기본값 없음)
 # .env 파일에서 'INPUT_PATH' (데이터 폴더 경로)를 읽어옵니다.
 INPUT_FOLDER = os.getenv('INPUT_PATH')
 
+
+
 # [방어 코드] 스크립트 실행에 필수적인 값들이 .env에 없는 경우,
 # (예: DB_NAME이 None일 경우) 명확한 오류 메시지를 주고 즉시 종료합니다.
 if not all([DB_NAME, DB_PASSWORD, INPUT_FOLDER]):
@@ -363,7 +365,7 @@ def process_data_etl(conn, file_path, prefix):
         
         # 2. 엑셀 파일의 *두 번째 줄*(헤더 1)을 읽어와서 실제 데이터프레임으로 사용합니다.
         # (이 줄에는 'mb_sn', '구분', '성별', '나이', '지역', '문항1', '문항2', '문항3', '문항4' 등이 있습니다)
-        df_panel = pd.read_excel(file_path, sheet_name=0, engine='openpyxl', header=1)
+        df_panel = pd.read_excel(file_path, sheet_name=0, engine='openpyxl', header=1, dtype=str)
         panel_columns = [str(col).strip() for col in df_panel.columns] # ['mb_sn', '구분', ..., '문항1', '문항2', ...]
         df_panel.columns = panel_columns # 공백 제거된 컬럼명으로 다시 설정
 
@@ -440,6 +442,8 @@ def process_data_etl(conn, file_path, prefix):
             # 3. 정제된 숫자 문자열('39')을 헬퍼 함수로 전달
             birth_year, age = parse_qpoll_age_info(age_raw_cleaned) # (1986, 39) 또는 (None, None) 반환
             
+            
+
             region = clean_cell(row_dict.get('지역')) # '서울', '경기' 등
             
             # [수정] 딕셔너리에 (mb_sn, ..., birth_year, age, region) 형태로 저장
@@ -478,6 +482,9 @@ def process_data_etl(conn, file_path, prefix):
 
                 # 분리된 각 값을 별개의 행으로 answers_to_insert 리스트에 추가
                 for final_value in split_values:
+                    answers_to_insert.append((mb_sn, unique_question_id, final_value))
+                    if final_value is None:
+                        continue
                     answers_to_insert.append((mb_sn, unique_question_id, final_value))
 
         # 딕셔너리(중복 제거됨)의 값들만 리스트로 변환

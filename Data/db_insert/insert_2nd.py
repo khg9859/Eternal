@@ -24,6 +24,8 @@ import pandas as pd # 데이터 분석 및 CSV 파일 읽기용 라이브러리
 import json # 코드북 데이터를 JSON 문자열로 변환하기 위함
 import os # .env 값(환경 변수)을 읽고, 파일 경로를 다루기 위함
 from dotenv import load_dotenv,find_dotenv  # .env 파일에서 환경 변수를 로드하기 위함
+import re
+import numbers
 
 # --- 2. .env 파일 로드 ---
 # [필수] 스크립트 시작 시 .env 파일에 정의된 변수들을 '환경 변수'로 로드합니다.
@@ -42,13 +44,14 @@ DB_PASSWORD = os.getenv('DB_PASSWORD')
 # .env 파일에서 데이터 파일 경로를 읽어옵니다.
 INPUT_FOLDER = os.getenv('INPUT_PATH')
 
+
 # [방어 코드] 스크립트 실행에 필수적인 값들이 .env에 없는지 확인합니다.
 if not all([DB_NAME, DB_PASSWORD, INPUT_FOLDER]):
     print("XXX [오류] .env 파일에 DB_NAME, DB_PASSWORD, INPUT_PATH 중 하나 이상이 설정되지 않았습니다.")
     exit() # 스크립트 강제 종료
 
 # 이 스크립트가 처리할 Welcome 2nd 파일의 정확한 이름
-DATA_FILE = 'wel_2ndex.csv'
+DATA_FILE = 'welcome_2nd.csv'
 CODEBOOK_FILE = 'welcome_2nd_codebook.csv'
 # 'w2_' 접두사: qpoll('qp...'), welcome_1st(메타데이터만)와 데이터가 섞이지 않도록 함
 PREFIX = 'w2_' 
@@ -243,9 +246,9 @@ def process_data_etl(conn, file_path, prefix):
     try:
         # CSV 읽기 (UTF-8 시도 -> 실패 시 CP949)
         try:
-            df_panel = pd.read_csv(file_path, encoding='utf-8')
+            df_panel = pd.read_csv(file_path, encoding='utf-8', dtype=str)
         except UnicodeDecodeError:
-            df_panel = pd.read_csv(file_path, encoding='cp949')
+            df_panel = pd.read_csv(file_path, encoding='cp949', dtype=str)
 
         mb_sn_col_name = 'mb_sn' # Welcome 2nd는 'mb_sn'으로 고정
         if mb_sn_col_name not in df_panel.columns:
