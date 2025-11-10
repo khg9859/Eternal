@@ -247,92 +247,78 @@ def parse_qpoll_age_info(age_raw_str):
 
     return (birth_year, age)
 
-# --- 7. Stage 1: qpoll 코드북 ETL (Pass 1) ---
 def process_codebook_etl(conn, file_path, prefix):
     """qpoll의 '수평' 형식 코드북(Sheet 2, header=0)을 파싱하여 DB에 삽입합니다."""
-    print(f"  [Stage 1] '{file_path}'의 qpoll 코드북(Sheet 2) 처리 시작 (Prefix: {prefix})...")
+    print(f"   [Stage 1] '{file_path}'의 qpoll 코드북(Sheet 2) 처리 시작 (Prefix: {prefix})...")
     
     try:
-        # "두 번째 시트"(index 1)를 읽음, "첫 번째 줄"(header=0)을 헤더로 사용
         df_codebook = pd.read_excel(file_path, sheet_name=1, engine='openpyxl', header=0)
         
-        # [중요] 중복된 질문 ID(q_title)를 덮어쓰기 위해 딕셔너리 사용
-        # (리스트는 [A, B, A]가 가능하지만, 딕셔너리는 {'A': B}로 중복이 안 됨)
         codebook_dict = {} 
 
-        # 시트의 모든 행 (각 행 = 질문 1개)을 순회
         for row in df_codebook.itertuples(index=False):
-            row_dict = row._asdict() # 현재 행을 딕셔너리로 변환 (예: {'설문제목': '...'})
+            row_dict = row._asdict() 
             
-            # '설문제목' 컬럼 값을 질문 제목이자 ID로 사용
             q_title = str(row_dict.get('설문제목', '')).strip()
             if not q_title:
-                continue # 질문 제목이 없으면 무시
+                continue 
+            
+            # [수정] '설문제목'이라는 텍스트 자체를 가진 헤더 행을 무시
+            if q_title == '설문제목':
+                continue
                 
-            # '설문제목'이 '성별', '나이' 등 메타데이터 컬럼명이면 무시
             if q_title in METADATA_COLUMNS or q_title in ID_CANDIDATES:
                 continue
 
-            # \n (개행 문자)가 ID에 포함되는 것을 방지 (DB ID로 부적합)
             cleaned_q_title = q_title.replace('\n', ' ')
-            # codebooks 테이블의 PK (예: 'qp250106_체력 관리')
             unique_id = f"{prefix}{cleaned_q_title}"
-            answers = [] # 이 질문의 보기 목록 (예: [{'qi_val': '1', 'qi_title': '헬스'}])
+            answers = [] 
             
-            # 이 시트(Sheet 2)는 '보기1', '보기2', ... '보기10' 열(column)을 가짐
             max_options = 10 
             for i in range(1, max_options + 1):
-                qi_title_key = f'보기{i}' # '보기1', '보기2', ...
-                qi_title = str(row_dict.get(qi_title_key, '')).strip() # '보기1'의 값 (예: '헬스')
-                qi_val = str(i) # 보기 값 (예: '1')
+                qi_title_key = f'보기{i}' 
+                qi_title = str(row_dict.get(qi_title_key, '')).strip() 
+                qi_val = str(i) 
                 
-                # '보기n' 컬럼에 유효한 텍스트가 있을 경우에만
                 if qi_title and pd.notna(row_dict.get(qi_title_key)):
                     answers.append({"qi_val": qi_val, "qi_title": qi_title})
 
-            # DB의 codebook_data (JSONB) 컬럼에 저장할 JSON 객체 생성
             codebook_obj = {
-                "codebook_id": unique_id, # (검색용 ID)
-                "q_title": q_title, # (임베딩 및 표기용) 원본 질문 제목
-                "answers": answers  # (RAG에서 보기 매핑용) 보기 목록
+                "codebook_id": unique_id, 
+                "q_title": q_title, 
+                "answers": answers  
             }
             
-            # 딕셔너리에 저장 (만약 unique_id가 중복되면, 새 값으로 덮어써짐)
             codebook_dict[unique_id] = codebook_obj
         
-        print(f"  [Stage 1] 코드북 파싱 완료. {len(codebook_dict)}개의 '실제 질문' 항목 감지.")
+        print(f"   [Stage 1] 코드북 파싱 완료. {len(codebook_dict)}개의 '실제 질문' 항목 감지.")
         
         # --- DB에 삽입 ---
-        data_to_insert = [] # DB에 일괄 삽입(batch insert)할 (ID, JSON) 튜플 리스트
+        data_to_insert = [] 
         for unique_id, codebook_obj in codebook_dict.items():
-            # JSON 객체를 한글(utf-8)이 깨지지 않는 문자열로 변환
             json_data_string = json.dumps(codebook_obj, ensure_ascii=False) 
             data_to_insert.append((unique_id, json_data_string))
             
         if data_to_insert: 
             cur = conn.cursor()
             try:
-                # 'ON CONFLICT (codebook_id) DO UPDATE ...':
-                # codebook_id(PK)가 이미 존재하면(welcome_2nd에서 삽입됨) 덮어쓰고,
-                # 없으면 새로 삽입합니다. (멱등성 보장)
                 insert_query = f"""
                 INSERT INTO {CODEBOOKS_TABLE} (codebook_id, codebook_data)
                 VALUES %s
                 ON CONFLICT (codebook_id) DO UPDATE SET
                     codebook_data = EXCLUDED.codebook_data;
                 """
-                # execute_values: data_to_insert 리스트를 한 번의 쿼리로 DB에 전송
                 execute_values(cur, insert_query, data_to_insert)
-                conn.commit() # DB에 최종 반영
+                conn.commit() 
             except Exception as e:
-                print(f"  XXX [Stage 1] 코드북 DB 삽입 중 오류 발생: {e}")
-                conn.rollback() # 오류 시 롤백
+                print(f"   XXX [Stage 1] 코드북 DB 삽입 중 오류 발생: {e}")
+                conn.rollback() 
             finally:
-                cur.close() # 커서 닫기
+                cur.close() 
         return True
 
     except Exception as e:
-        print(f"  XXX [Stage 1] 코드북 시트 처리 중 오류 발생: {e}")
+        print(f"   XXX [Stage 1] 코드북 시트 처리 중 오류 발생: {e}")
         return False
 
 # --- 8. Stage 2: qpoll 패널 데이터 ETL (Pass 2) ---
