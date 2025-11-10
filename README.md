@@ -5,8 +5,8 @@
 | **데이터 계열** | **구성 테이블** | **설명** |
 |------------------|------------------|-----------|
 | **qpoll 계열** | `metadata`, `respondents`, `answers` | 인구통계 정보(`metadata`) + 응답 내용(`answers`) 모두 존재.<br>`respondents`는 패널 ID(`mb_sn`)와 벡터 저장용으로 사용. |
-| **welcom_1st** | `respondents`, `metadata` | 지역·나이 등 기본 속성만 존재 → 별도의 `answers` 불필요.<br>`respondents`로 식별, `metadata`에 응답 내용 저장.<br>(1st의 응답내용 = `metadata`) |
-| **welcom_2nd** | `respondents`, `answers` | 문항 중심 응답 데이터만 존재 → `metadata` 없이 `answers`로 관리. |
+| **welcome_1st** | `respondents`, `metadata` | 지역·나이 등 기본 속성만 존재 → 별도의 `answers` 불필요.<br>`respondents`로 식별, `metadata`에 응답 내용 저장.<br>(1st의 응답내용 = `metadata`) |
+| **welcome_2nd** | `respondents`, `answers` | 문항 중심 응답 데이터만 존재 → `metadata` 없이 `answers`로 관리. |
 | **공통 문항 정보** | `codebooks` | 모든 파일의 문항(`Q1~Qn`)과 보기 정보를 통합 관리.<br>`answers`와 `question_id` 기준으로 연결. |
 
 ---
@@ -48,10 +48,10 @@ INPUT_FOLDER = os.getenv('INPUT_PATH')
 - 필요한 `.xlsx` 파일을 아래 폴더로 복사:./Data/db_insert/execptFile/
 
 
-#### 🧩 Welcom 1st / 2nd 계열
+#### 🧩 Welcome 1st / 2nd 계열
 - 위와 동일하게 실행  
 - 단, **파일 확장자는 `.csv`**  
-- 코드북(`codebook_*.xlsx` 등)이 있다면 함께 복사해야 함  
+- 코드북(`welcome_*_codebook.csv` 등)이 있다면 함께 복사해야 함  
 
 ---
 
@@ -69,7 +69,7 @@ INPUT_FOLDER = os.getenv('INPUT_PATH')
 
 ```bash
 python ./Data/db_insert/insert_all.py
-* ./Data/db_insert/drop_table.py 는 모든 테이블을 DROP하는 코드입니다. insert_all.py 실행시 초기화 목적으로 실행되니 원 DB를 유지 원할 시 이를 주석처리 해야합니다! *
+* ./Data/db_insert/drop_table.py 는 모든 테이블을 DROP하는 코드임으로.. insert_all.py 실행시 초기화 목적으로 실행되니 원 DB를 유지 원할 시 이를 주석처리 해야함! *
 
 4️⃣ 임베딩 실행
 python ./embedding/embedding.py
@@ -78,7 +78,7 @@ python ./embedding/profileVector.py
 5️⃣ PostgreSQL 검수
 
 psql 환경에서 데이터가 정상적으로 삽입되고
-임베딩(p_vector, a_vector, q_vector)이 잘 생성되었는지 확인합니다.
+임베딩(p_vector, a_vector, q_vector)이 잘 생성되었는지 확인.
 
 ```
 
