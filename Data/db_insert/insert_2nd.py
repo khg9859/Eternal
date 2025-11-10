@@ -51,7 +51,7 @@ if not all([DB_NAME, DB_PASSWORD, INPUT_FOLDER]):
     exit() # 스크립트 강제 종료
 
 # 이 스크립트가 처리할 Welcome 2nd 파일의 정확한 이름
-DATA_FILE = 'welcome_2nd.csv'
+DATA_FILE = 'wel_2nd_test.csv'
 CODEBOOK_FILE = 'welcome_2nd_codebook.csv'
 # 'w2_' 접두사: qpoll('qp...'), welcome_1st(메타데이터만)와 데이터가 섞이지 않도록 함
 PREFIX = 'w2_' 
@@ -95,7 +95,8 @@ def setup_master_tables(conn):
             mb_sn VARCHAR(255) NOT NULL UNIQUE REFERENCES {RESPONDENTS_TABLE}(mb_sn) ON DELETE CASCADE,
             mobile_carrier VARCHAR(100) DEFAULT NULL,
             gender VARCHAR(10) DEFAULT NULL,
-            age VARCHAR(50) DEFAULT NULL, 
+            birth_year INT DEFAULT NULL, 
+            age INT DEFAULT NULL, 
             region VARCHAR(100) DEFAULT NULL
         );""",
         # 3. codebooks (qpoll과 동일한 구조)
