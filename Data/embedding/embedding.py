@@ -1,117 +1,126 @@
 # -*- coding: utf-8 -*-
-# -----------------------------------------------------------------
-# EMBEDDING SCRIPT
-# -----------------------------------------------------------------
-# 이 스크립트는 PostgreSQL DB에 연결하여 3가지 작업을 수행합니다:
-# 1. 'codebooks' 테이블의 질문 제목을 임베딩하여 'q_vector'에 저장
-# 2. 'answers' 테이블의 답변을 임베딩하여 'a_vector'에 저장
-#    - 객관식: 코드북의 보기 텍스트 (예: '미혼')
-#    - 주관식: 원본 답변 텍스트 (예: 'K5', '너무 비싸요')
-# 3. 'respondents' 테이블에 사용자별 통합 프로필 벡터를 생성하여 저장
-#
-# [요구 라이브러리]
-# pip install psycopg2-binary numpy pandas transformers torch
-#
-# [DB 사전 설정]
-# 이 스크립트를 실행하기 전에 PostgreSQL에 'vector' 확장이 설치되어 있어야 합니다.
-# (DB 슈퍼유저로 접속하여 `CREATE EXTENSION IF NOT EXISTS vector;` 실행)
-# -----------------------------------------------------------------
+"""
+A-Q Vector Embedding 스크립트 (v1.9 - DB Insert Bug Fix)
 
+[v1.9 수정 사항]
+- [Base] (사용자 요청) 'transformers' + 수동 'mean_pooling' 방식(v1.0)을 베이스로 사용.
+- [Fix] (사용자 요청) 'KUREEmbeddingModel'이 인터넷("nlpai-lab/KURE-v1")에서 모델을
+  직접 다운로드/로드하도록 'MODEL_PATH' (로컬 경로) 로직 제거.
+- [Fix] (v1.8 유지) 'embed_answers' (Phase 4)의 'isdigit()' 로직 유지.
+- [Fix] (v1.6 유지) 'pd.isna()'를 사용하여 ETL에서 누락된 NULL/NaN을 방어.
+
+- [CRITICAL BUG FIX 1] (Phase 4 / ids_to_mark_zero):
+    - 'zero_vector_str' (문자열)을 'zero_vector' (Python 리스트)로 수정.
+    - (psycopg2는 vector 타입에 문자열이 아닌 리스트를 기대함)
+- [CRITICAL BUG FIX 2] (Phase 3 / embed_codebooks):
+    - SQL 쿼리의 'UPDATE ... SET q_vector = data.a_vector' 오타를
+    - 'SET q_vector = data.q_vector'로 수정.
+"""
+
+# --- 1. 라이브러리 임포트 ---
 import psycopg2
 from psycopg2.extras import execute_values
-import pandas as pd
+import numpy as np
 import json
 import os
-import numpy as np  # 임베딩 벡터 계산용
-import time
-import torch # [신규] PyTorch
+import torch 
 from transformers import AutoTokenizer, AutoModel
 from dotenv import load_dotenv, find_dotenv 
+import re 
+import pandas as pd # (pd.isna()는 헬퍼가 아니므로 유지)
 
+# --- 2. .env 파일 로드 ---
 load_dotenv(find_dotenv())
-# --- 설정 (Configuration) ---
-DB_HOST = os.getenv('DB_HOST','localhost') # 데이터베이스 서버 주소 ##보안을 신경 쓰지 않으면 = DB_HOST='' 식으로 사용가능
-DB_PORT = os.getenv('DB_PORT','5432')    # 데이터베이스 포트
-DB_NAME = os.getenv('DB_NAME')   # 연결할 데이터베이스 이름
-DB_USER = os.getenv('DB_USER','postgres')   # 데이터베이스 사용자 ID
-DB_PASSWORD = os.getenv('DB_PASSWORD')  # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
 
-# [수정] 임베딩 모델의 차원 (KURE-v1은 1024)
+# --- 3. 설정 (Configuration) ---
+DB_HOST = os.getenv('DB_HOST','localhost') 
+DB_PORT = os.getenv('DB_PORT','5432')
+DB_NAME = os.getenv('DB_NAME') 
+DB_USER = os.getenv('DB_USER','postgres')
+DB_PASSWORD = os.getenv('DB_PASSWORD')
+
+if not all([DB_NAME, DB_PASSWORD]):
+    print("XXX [오류] .env 파일에 DB_NAME 또는 DB_PASSWORD가 설정되지 않았습니다.")
+    exit()
+
 EMBEDDING_DIMENSION = 1024
-# DB에 한 번에 업데이트할 배치 크기 # 이 부분 설정 잘못할 시 Out Of Memory 이슈 생길 수 있음! 하드웨어에 따라 설정
-BATCH_SIZE = 500
-# 임베딩 모델 API에 한 번에 보낼 텍스트 배치 크기
+BATCH_SIZE = 500 
 MODEL_BATCH_SIZE = 32 
 
-# --- 테이블 이름 (ETL 스크립트와 동일해야 함) ---
 RESPONDENTS_TABLE = 'respondents'
 ANSWERS_TABLE = 'answers'
 CODEBOOKS_TABLE = 'codebooks'
-METADATA_TABLE = 'metadata'
+METADATA_TABLE = 'metadata' 
 
-# --- [신규] KURE-v1 모델 로딩 ---
 
-# KURE-v1 README에서 권장하는 Mean Pooling 함수
+# --- 4. 헬퍼 함수 (정제) ---
+def clean_text_for_embedding(text):
+    """(v1.1) KURE 모델에 넣기 전, 텍스트를 정제합니다."""
+    if not text:
+        return ""
+    return str(text).strip()
+
+# --- 5. KURE 임베딩 모델 클래스 (수동 Mean Pooling) ---
 def mean_pooling(model_output, attention_mask):
-    token_embeddings = model_output[0] # First element of model_output contains all token embeddings
+    token_embeddings = model_output[0] 
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+    sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
+    sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+    return sum_embeddings / sum_mask
 
 class KUREEmbeddingModel:
-    """nlpai-lab/KURE-v1 모델을 로드하고 임베딩을 수행하는 클래스"""
-    def __init__(self, dimension):
+    """[v1.7] nlpai-lab/KURE-v1 모델을 (인터넷에서) 로드하고 임베딩을 수행하는 클래스"""
+    def __init__(self, dimension): 
         try:
-            # GPU 사용 가능 여부 확인
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             print(f"KUREEmbeddingModel: '{self.device}' 디바이스를 사용하여 모델을 로드합니다.")
             
+            # [v1.7] 인터넷에서 모델 다운로드/로드
             self.tokenizer = AutoTokenizer.from_pretrained("nlpai-lab/KURE-v1")
             self.model = AutoModel.from_pretrained("nlpai-lab/KURE-v1").to(self.device)
-            self.model.eval() # 평가 모드로 설정 (Dropout 등 비활성화)
+            self.model.eval() 
             
             print(f"KUREEmbeddingModel: 'nlpai-lab/KURE-v1' 모델 로드 성공.")
             
-            # 모델 차원 확인 (설정값과 다를 경우 경고)
             if self.model.config.hidden_size != dimension:
-                 print(f"[경고] 설정된 EMBEDDING_DIMENSION({dimension})과 모델의 hidden_size({self.model.config.hidden_size})가 다릅니다!")
-                 # (필요시) EMBEDDING_DIMENSION = self.model.config.hidden_size 로 강제 설정 가능
+                print(f"[경고] 설정된 EMBEDDING_DIMENSION({dimension})과 모델의 hidden_size({self.model.config.hidden_size})가 다릅니다!")
+                exit()
             
+        except OSError as e:
+            print(f"XXX [오류] 모델 다운로드/로드 실패: {e}")
+            print(f"XXX (참고) 인터넷 연결이 불안정하거나, Hugging Face 서버 문제일 수 있습니다.")
+            exit()
         except Exception as e:
             print(f"XXX KUREEmbeddingModel: 모델 로드 중 심각한 오류 발생: {e}")
-            print("스크립트를 중단합니다. 'pip install transformers torch'가 올바르게 실행되었는지 확인하세요.")
+            print(f"XXX (참고) 'tf_keras' 오류의 경우, (myenv) 환경의 PyTorch/TensorFlow 충돌 문제입니다.")
             raise e
 
     def get_embeddings(self, text_list):
-        """텍스트 리스트를 받아 임베딩 벡터 리스트(NumPy Array)를 반환합니다."""
+        """[v1.0] 텍스트 리스트를 받아 임베딩 벡터 리스트(NumPy Array)를 반환합니다."""
         all_vectors = []
         
-        # [신규] 텍스트가 너무 많을 경우, 모델 배치 크기(MODEL_BATCH_SIZE)만큼 나누어 처리
         for i in range(0, len(text_list), MODEL_BATCH_SIZE):
             batch_texts = text_list[i : i + MODEL_BATCH_SIZE]
             
-            # 1. 토크나이징
+            cleaned_texts = [clean_text_for_embedding(t) for t in batch_texts]
+
             encoded_input = self.tokenizer(
-                batch_texts, 
+                cleaned_texts, 
                 padding=True, 
                 truncation=True, 
                 return_tensors='pt', 
-                max_length=512 # KURE-v1의 최대 길이
+                max_length=512
             ).to(self.device)
             
-            # 2. 모델 추론 (Gradient 계산 안 함)
             with torch.no_grad():
                 model_output = self.model(**encoded_input)
             
-            # 3. Mean Pooling (문장 벡터 추출)
             sentence_embeddings = mean_pooling(model_output, encoded_input['attention_mask'])
-            
-            # 4. CPU로 이동 및 NumPy 변환 (psycopg2가 인식할 수 있도록)
             all_vectors.extend(sentence_embeddings.cpu().numpy())
             
-        print(f"  [Embedding API] {len(text_list)}개 텍스트 임베딩 완료.")
         return all_vectors
 
-# --- 1. DB 연결 함수 ---
+# --- 6. DB 연결 함수 ---
 def connect_to_db():
     """PostgreSQL 마스터 데이터베이스에 연결합니다."""
     try:
@@ -125,98 +134,71 @@ def connect_to_db():
         print(f"XXX [Phase 1] DB 연결 실패: {e}")
         return None
 
-# --- 2. [신규] 벡터 컬럼 준비 함수 ---
+# --- 7. 벡터 컬럼 셋업 함수 ---
 def setup_vector_columns(conn):
-    """임베딩 벡터를 저장할 컬럼을 테이블에 추가(또는 재생성)합니다."""
-    print(">>> [Phase 2] 벡터 컬럼(q_vector, a_vector, profile_vector) 셋업 시작...")
-    cur = conn.cursor()
+    """(v1.0) A/Q/P 벡터를 저장할 컬럼을 (DROP/ADD) 셋업합니다."""
+    print("\n>>> [Phase 2] 벡터 컬럼(q_vector, a_vector, profile_vector) 셋업 시작...")
+    
+    queries = [
+        f"ALTER TABLE {CODEBOOKS_TABLE} DROP COLUMN IF EXISTS q_vector;",
+        f"ALTER TABLE {CODEBOOKS_TABLE} ADD COLUMN q_vector VECTOR({EMBEDDING_DIMENSION});",
+        f"ALTER TABLE {ANSWERS_TABLE} DROP COLUMN IF EXISTS a_vector;",
+        f"ALTER TABLE {ANSWERS_TABLE} ADD COLUMN a_vector VECTOR({EMBEDDING_DIMENSION});",
+        f"ALTER TABLE {RESPONDENTS_TABLE} DROP COLUMN IF EXISTS profile_vector;",
+        f"ALTER TABLE {RESPONDENTS_TABLE} ADD COLUMN profile_vector VECTOR({EMBEDDING_DIMENSION});"
+    ]
+    
     try:
-        # 0. pgvector 확장 활성화
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-        
-        # 1. codebooks (질문 벡터)
-        # [수정] ADD IF NOT EXISTS 대신 DROP + ADD로 변경
-        cur.execute(f"""
-            ALTER TABLE {CODEBOOKS_TABLE} 
-            DROP COLUMN IF EXISTS q_vector;
-        """)
-        cur.execute(f"""
-            ALTER TABLE {CODEBOOKS_TABLE} 
-            ADD COLUMN q_vector VECTOR({EMBEDDING_DIMENSION});
-        """)
-        
-        # 2. answers (답변 벡터)
-        # [수정] ADD IF NOT EXISTS 대신 DROP + ADD로 변경
-        cur.execute(f"""
-            ALTER TABLE {ANSWERS_TABLE} 
-            DROP COLUMN IF EXISTS a_vector;
-        """)
-        cur.execute(f"""
-            ALTER TABLE {ANSWERS_TABLE} 
-            ADD COLUMN a_vector VECTOR({EMBEDDING_DIMENSION});
-        """)
-        
-        # 3. respondents (프로필 벡터)
-        # (이 로직은 이미 DROP + ADD로 올바르게 되어 있었음)
-        cur.execute(f"""
-            ALTER TABLE {RESPONDENTS_TABLE} 
-            DROP COLUMN IF EXISTS profile_vector;
-        """)
-        cur.execute(f"""
-            ALTER TABLE {RESPONDENTS_TABLE} 
-            ADD COLUMN profile_vector VECTOR({EMBEDDING_DIMENSION});
-        """)
-        
-        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            for query in queries:
+                cur.execute(query)
+            conn.commit()
         print(">>> [Phase 2] 모든 벡터 컬럼 셋업 완료.")
-        return True
     except Exception as e:
         print(f"XXX [Phase 2] 벡터 컬럼 셋업 중 오류 발생: {e}")
         conn.rollback()
-        return False
-    finally:
-        cur.close()
+        raise 
 
-# --- 3. [신규] Codebook 임베딩 함수 ---
+# --- 8. Codebook (질문) 임베딩 함수 (Phase 3) ---
 def embed_codebooks(conn, model):
-    """codebooks 테이블의 모든 질문(q_title)을 임베딩합니다."""
+    """(v1.0) codebooks 테이블의 'q_title'을 임베딩하여 'q_vector'에 저장합니다."""
     print("\n>>> [Phase 3] Codebook (질문) 임베딩 시작...")
     cur = conn.cursor()
     try:
-        # q_vector가 NULL인 (아직 임베딩되지 않은) 질문들을 가져옵니다.
-        cur.execute(f"""
-            SELECT codebook_id, codebook_data ->> 'q_title' AS q_title
-            FROM {CODEBOOKS_TABLE}
-            WHERE (codebook_data ->> 'q_title') IS NOT NULL
-              AND q_vector IS NULL;
-        """)
+        cur.execute(f"SELECT codebook_id, codebook_data ->> 'q_title' FROM {CODEBOOKS_TABLE} WHERE q_vector IS NULL;")
         rows = cur.fetchall()
         
         if not rows:
-            print("  [Info] 새로 임베딩할 질문이 없습니다.")
+            print("  [Info] 새로 임베딩할 질문(q_vector)이 없습니다.")
             return
 
         print(f"  [Info] 총 {len(rows)}개의 신규 질문을 임베딩합니다.")
         
-        texts_to_embed = [row[1] for row in rows]
-        ids_to_update = [row[0] for row in rows]
+        texts_to_embed = [row[1] for row in rows if row[1]] 
+        ids_to_update = [row[0] for row in rows if row[1]]
         
-        # 모델을 통해 텍스트 리스트를 벡터 리스트로 변환
+        if not texts_to_embed:
+            print("  [Info] 임베딩할 q_title 텍스트가 없습니다.")
+            return
+
         vectors = model.get_embeddings(texts_to_embed)
+        print(f"  [Embedding API] {len(texts_to_embed)}개 텍스트 임베딩 완료.") 
         
-        # [수정] psycopg2가 numpy array를 인식하도록 .tolist() 호출
         update_data = [(v.tolist(), id_val) for v, id_val in zip(vectors, ids_to_update)]
 
-        # execute_values로 DB에 일괄 업데이트
-        update_query = f"""
-            UPDATE {CODEBOOKS_TABLE} SET q_vector = data.q_vector
-            FROM (VALUES %s) AS data (q_vector, codebook_id)
-            WHERE {CODEBOOKS_TABLE}.codebook_id = data.codebook_id;
-        """
-        execute_values(cur, update_query, update_data, page_size=BATCH_SIZE)
-        conn.commit()
-        
-        print(f"  [Success] {len(rows)}개의 질문 벡터(q_vector) 저장 완료.")
+        if update_data:
+            # [CRITICAL BUG FIX 2] (v1.9)
+            # 'data.a_vector' -> 'data.q_vector'로 오타 수정
+            # 'AS data (a_vector, ...)' -> 'AS data (q_vector, ...)'로 오타 수정
+            update_query = f"""
+                UPDATE {CODEBOOKS_TABLE} SET q_vector = data.q_vector
+                FROM (VALUES %s) AS data (q_vector, codebook_id)
+                WHERE {CODEBOOKS_TABLE}.codebook_id = data.codebook_id;
+            """
+            execute_values(cur, update_query, update_data, page_size=BATCH_SIZE)
+            conn.commit()
+            print(f"  [Success] 총 {len(update_data)}개의 질문 벡터(q_vector) 저장 완료.")
 
     except Exception as e:
         print(f"  XXX [Phase 3] Codebook 임베딩 중 오류 발생: {e}")
@@ -224,23 +206,20 @@ def embed_codebooks(conn, model):
     finally:
         cur.close()
 
-# --- 4. [신규] Answers 임베딩 함수 (핵심 로직) ---
+# --- 9. Answers (답변) 임베딩 함수 (Phase 4) ---
 def embed_answers(conn, model):
     """
-    answers 테이블의 답변을 임베딩합니다.
-    - (요청사항 1) 객관식: 코드북의 '보기 텍스트' (예: '미혼')
-    - (요청사항 1) 주관식: 'answer_value' 원본 텍스트 (예: 'K5', '너무 비싸요')
+    [v1.8] answers 테이블의 답변을 임베딩합니다.
+    (사용자 로직: "isdigit()이냐 아니냐"로 객관식/주관식 분류)
     """
     print("\n>>> [Phase 4] Answers (답변) 임베딩 시작...")
     cur = conn.cursor()
     try:
-        # a_vector가 NULL인 (임베딩 안 된) 답변들을 코드북 정보와 함께 가져옵니다.
-        # [최적화] LIMIT...OFFSET을 사용하여 대용량 데이터를 청크(chunk) 단위로 처리
-        
         total_processed = 0
         
         while True:
             print(f"  [Info] DB에서 임베딩할 답변 {BATCH_SIZE}개 조회 시도 (Total: {total_processed})...")
+            
             query = f"""
                 SELECT 
                     a.answer_id, 
@@ -250,7 +229,7 @@ def embed_answers(conn, model):
                 JOIN {CODEBOOKS_TABLE} AS c ON a.question_id = c.codebook_id
                 WHERE a.a_vector IS NULL
                 LIMIT {BATCH_SIZE}; 
-            """ # OFFSET을 사용하지 않고, 처리된 항목(NULL이 아님)을 제외하며 반복
+            """
             
             cur.execute(query)
             rows = cur.fetchall()
@@ -261,50 +240,76 @@ def embed_answers(conn, model):
 
             print(f"  [Info] {len(rows)}개의 신규 답변을 처리합니다. 임베딩할 텍스트 추출 중...")
 
-            tasks = [] # (text_to_embed, answer_id)
-            ids_to_mark_null = [] # 임베딩할 텍스트가 없는 답변 ID (다시 조회되지 않도록)
+            tasks = [] # (text_to_embed, answer_id) : 실제 임베딩 대상
+            ids_to_mark_zero = [] # (answer_id,) : 영벡터 처리 대상
 
             for row in rows:
-                answer_id, answer_value, codebook_data = row
+                answer_id, answer_value_raw, codebook_data = row
+                
+                if pd.isna(answer_value_raw):
+                    ids_to_mark_zero.append((answer_id,))
+                    continue
+                
+                answer_value = str(answer_value_raw).strip() 
                 
                 if not answer_value or not codebook_data:
-                    ids_to_mark_null.append((answer_id,))
+                    ids_to_mark_zero.append((answer_id,))
                     continue
 
-                choices = codebook_data.get('answers', [])
                 text_to_embed = None
 
-                # [핵심 로직 1] 객관식
-                if choices:
-                    for choice in choices:
-                        if str(choice.get('qi_val')).strip() == str(answer_value).strip():
-                            text_to_embed = str(choice.get('qi_title')).strip()
-                            break
+                if answer_value.isdigit():
+                    # --- [숫자] (객관식 또는 Numeric) ---
+                    choices = codebook_data.get('answers', [])
+                    
+                    # [수정] choices가 있는지 확인하는 분기 추가
+                    if choices:
+                        # --- 1. [객관식] (Choices 리스트가 있음) ---
+                        found_match = False
+                        if choices: # (이중 체크지만 안전을 위해 둠)
+                            for choice in choices:
+                                qi_val_str = str(choice.get('qi_val')).strip()
+                                if qi_val_str == answer_value:
+                                    text_to_embed = str(choice.get('qi_title')).strip() 
+                                    found_match = True
+                                    break
+                        
+                        if found_match and text_to_embed:
+                            tasks.append((text_to_embed, answer_id))
+                        else:
+                            # 객관식인데 매칭되는 보기가 없음 (e.g. '99')
+                            ids_to_mark_zero.append((answer_id,))
+                    
+                    else:
+                        # --- 2. [숫자형] (Choices 리스트가 비어있음) ---
+                        # "자녀수" + "2" => "자녀수 2" 조합
+                        q_title = codebook_data.get('q_title')
+                        if q_title:
+                            text_to_embed = f"{str(q_title).strip()} {answer_value}"
+                            tasks.append((text_to_embed, answer_id))
+                        else:
+                            # q_title도 없는 비정상 데이터
+                            ids_to_mark_zero.append((answer_id,))
                 
-                # [핵심 로직 2 - Fallback] 주관식/기타
-                if not text_to_embed:
-                    # answer_value가 단순 숫자가 아닌 '텍스트'일 경우에만 임베딩
-                    if not str(answer_value).replace('.', '', 1).isdigit():
-                        text_to_embed = str(answer_value).strip()
-
-                if text_to_embed:
-                    tasks.append((text_to_embed, answer_id))
                 else:
-                    # 임베딩할 가치가 없는 답변 (예: 단순 숫자 '1')도 NULL 처리 대상
-                    ids_to_mark_null.append((answer_id,))
+                    # --- [텍스트] (주관식) ---
+                    text_to_embed = answer_value 
+                    tasks.append((text_to_embed, answer_id))
+
             
-            if not tasks and not ids_to_mark_null:
-                continue # 처리할 작업이 없음
+            if not tasks and not ids_to_mark_zero:
+                continue 
                 
-            print(f"  [Info] {len(rows)}개 중 {len(tasks)}개의 텍스트 답변 임베딩 / {len(ids_to_mark_null)}개는 NULL로 표시.")
+            print(f"  [Info] {len(rows)}개 중 {len(tasks)}개의 텍스트 답변 임베딩 / {len(ids_to_mark_zero)}개는 영벡터(Zero)로 표시.")
 
             # --- 일괄 임베딩 및 DB 업데이트 ---
             if tasks:
                 texts_to_embed = [task[0] for task in tasks]
                 ids_to_update = [task[1] for task in tasks]
-                vectors = model.get_embeddings(texts_to_embed)
                 
-                # [수정] .tolist() 호출
+                vectors = model.get_embeddings(texts_to_embed)
+                print(f"  [Embedding API] {len(texts_to_embed)}개 텍스트 임베딩 완료.") 
+                
                 update_data = [(v.tolist(), id_val) for v, id_val in zip(vectors, ids_to_update)]
 
                 update_query = f"""
@@ -314,23 +319,23 @@ def embed_answers(conn, model):
                 """
                 execute_values(cur, update_query, update_data, page_size=BATCH_SIZE)
             
-            # [신규] 임베딩할 수 없는 답변들(ids_to_mark_null) 처리
-            # a_vector에 (0,0,...) 같은 '제로 벡터'를 넣어, 다음 조회에서 제외되도록 함
-            if ids_to_mark_null:
+            if ids_to_mark_zero:
+                # [CRITICAL BUG FIX 1] (v1.9)
+                # 'zero_vector_str' (문자열) -> 'zero_vector' (리스트)로 수정
                 zero_vector = [0.0] * EMBEDDING_DIMENSION
-                update_data_null = [(zero_vector, id_val[0]) for id_val in ids_to_mark_null]
+                update_data_zero = [(zero_vector, id_val[0]) for id_val in ids_to_mark_zero]
                 
-                update_query_null = f"""
+                update_query_zero = f"""
                     UPDATE {ANSWERS_TABLE} SET a_vector = data.a_vector
                     FROM (VALUES %s) AS data (a_vector, answer_id)
                     WHERE {ANSWERS_TABLE}.answer_id = data.answer_id;
                 """
-                execute_values(cur, update_query_null, update_data_null, page_size=BATCH_SIZE)
+                execute_values(cur, update_query_zero, update_data_zero, page_size=BATCH_SIZE)
 
-            conn.commit() # 이번 배치 작업 커밋
+            conn.commit() 
             total_processed += len(rows)
         
-        print(f"  [Success] 총 {total_processed}개의 답변 벡터(a_vector) 처리 완료.")
+        print(f"\n  [Success] 총 {total_processed}개의 답변 벡터(a_vector) 처리 완료.")
 
     except Exception as e:
         print(f"  XXX [Phase 4] Answers 임베딩 중 오류 발생: {e}")
@@ -338,33 +343,26 @@ def embed_answers(conn, model):
     finally:
         cur.close()
 
-# --- 6. 메인 실행 파이프라인 ---
+
+# --- 10. 메인 실행 파이프라인 ---
 def main():
-    print("===== 임베딩 파이프라인 시작 =====")
+    print("===== A/Q 벡터 임베딩 파이프라인 시작 =====")
     
     try:
-        # [수정] KURE 모델 초기화
+        # [v1.7] 인터넷에서 모델 로드
         model = KUREEmbeddingModel(dimension=EMBEDDING_DIMENSION)
     except Exception as e:
         print("XXX 모델 초기화 실패. 스크립트를 종료합니다.")
         return
 
-    db_conn = connect_to_db() # 1. DB 연결
+    db_conn = connect_to_db() 
     if db_conn:
         try:
-            # 2. DB 스키마(벡터 컬럼) 설정
-            if not setup_vector_columns(db_conn):
-                print("오류: 마스터 테이블 벡터 컬럼 생성에 실패하여 ETL을 중단합니다.")
-                db_conn.close()
-                return
-
-            # 3. Codebook (질문) 임베딩 실행
+            setup_vector_columns(db_conn)
             embed_codebooks(db_conn, model)
-            
-            # 4. Answers (답변) 임베딩 실행 (핵심 로직)
             embed_answers(db_conn, model)
             
-            
+            print("\n[Info] A-Vector 및 Q-Vector 생성이 완료되었습니다.")
 
             print("\n>>> [Success] 모든 임베딩 작업이 완료되었습니다.")
 
@@ -378,4 +376,3 @@ def main():
 # --- 스크립트 실행 ---
 if __name__ == '__main__':
     main()
-
