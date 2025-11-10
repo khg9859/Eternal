@@ -13,7 +13,8 @@ PostgreSQL 데이터베이스의 'respondents', 'codebooks', 'answers' 테이블
 1. .env 파일을 통해 DB 접속 정보를 안전하게 로드합니다.
 2. 4개 마스터 테이블이 ('birth_year INT', 'age INT' 스키마로) 없으면 생성합니다. (IF NOT EXISTS)
 3. 'welcome_2nd_codebook.csv' (수직 형식) 파일을 파싱하여 'codebooks' 테이블에 삽입합니다.
-   - [수정] 'Q'로 시작하는 'var_name'만 새 질문으로 인식하여 잉여 데이터('w2_1004') 삽입을 방지합니다.
+   - [수정] 'Q'로 시작하는 'var_name'만 새 질문으로 인식하고,
+     'Q'로 시작하지 않는 'var_name'은 '보기(qi_val)'로 인식하여 'w2_1004' 같은 잉여 데이터 문제를 해결합니다.
 4. 'welcome_2nd.csv' (데이터 파일)을 파싱하여 'respondents', 'answers' 테이블에 삽입합니다.
    - [수정] pd.isna() 및 'nan' 문자열 검사를 통해 빈 ID가 DB에 삽입되는 오류를 수정합니다.
 5. 'w2_' 접두사(prefix)를 사용하여 다른 데이터 소스(qpoll 등)와 ID가 충돌하지 않도록 합니다.
@@ -48,7 +49,7 @@ if not all([DB_NAME, DB_PASSWORD, INPUT_FOLDER]):
     exit() # 스크립트 강제 종료
 
 # 이 스크립트가 처리할 Welcome 2nd 파일의 정확한 이름
-DATA_FILE = 'welcome_2nd.csv'
+DATA_FILE = 'wel_2nd_test.csv'
 CODEBOOK_FILE = 'welcome_2nd_codebook.csv'
 # 'w2_' 접두사: qpoll('qp...'), welcome_1st(메타데이터만)와 데이터가 섞이지 않도록 함
 PREFIX = 'w2_' 
@@ -159,10 +160,10 @@ def process_codebook_etl(conn, file_path, prefix):
             # [수정] clean_cell을 적용하여 'nan' 문자열 방지
             var_name = clean_cell(row[0])      # 1열 (변수명)
             question_text = clean_cell(row[1]) # 2열 (문항)
-            question_type = clean_cell(row[2]) # 3열 (문항유형)
+            # question_type = clean_cell(row[2]) # 3열 (문항유형) - 이 로직에서는 사용 안 함
 
             # [수정] 잉여 데이터('w2_1004') 버그 수정
-            # 'Q'로 시작하는 var_name만 '새로운 질문'으로 간주합니다.
+            # 1열(var_name)이 'Q'로 시작하면 "새로운 질문"으로 간주합니다.
             if var_name and var_name.strip().startswith('Q'):
                 
                 # 이전에 처리 중이던 질문(current_question_id)이 있었다면,
@@ -180,17 +181,17 @@ def process_codebook_etl(conn, file_path, prefix):
                 current_question_title = question_text
                 current_answers = [] # 보기 목록 초기화
 
-            # '보기 항목' 처리 (1열이 비어있고, 2열과 3열에 값이 있는 경우)
-            elif question_text and question_type:
-                qi_val = question_text  # 2열 값 (예: '1')
-                qi_title = question_type # 3열 값 (예: '미혼')
-
-                # 2열이 숫자이고, 3열이 'SINGLE', 'Numeric' 같은 타입 설명이 아닌 경우
-                # (즉, '1', '미혼' 처럼 실제 "보기" 항목인 경우)
-                if qi_val.isdigit() and qi_title not in ('SINGLE', 'Numeric', 'String'):
+            # [수정] "보기 항목" 처리
+            # 1열(var_name)이 'Q'로 시작하지 *않고*, 1열과 2열에 모두 값이 있다면
+            # (예: '1', '미혼' 또는 '590', '리베로' 또는 'w2_1004', 'GV80')
+            # 이는 'current_question_id'에 속한 "보기"로 간주합니다.
+            elif var_name and question_text:
+                if current_question_id: # (현재 속한 질문이 있을 경우에만)
+                    qi_val = var_name      # 1열 값 (예: '1' 또는 '590')
+                    qi_title = question_text # 2열 값 (예: '미혼' 또는 '리베로')
                     current_answers.append({"qi_val": qi_val, "qi_title": qi_title})
             
-            # (var_name이 'w2_1004'처럼 'Q'로 시작하지 않으면, 위 if/elif를 모두 통과하며 무시됨)
+            # (1열이 비어있거나, 1열은 있는데 2열이 비어있으면 무시)
 
         # 마지막 질문 저장 (루프가 끝난 후, 미처 저장되지 못한 마지막 질문을 저장)
         if current_question_id:
@@ -207,6 +208,7 @@ def process_codebook_etl(conn, file_path, prefix):
         data_to_insert = []
         # [수정] 딕셔너리에서 (ID, JSON) 튜플 리스트 생성
         for unique_id, codebook_obj in codebook_dict.items():
+            # 'mb_sn'은 질문이 아니므로 코드북에 삽입하지 않음
             if unique_id == f"{prefix}mb_sn":
                 continue
             json_data_string = json.dumps(codebook_obj, ensure_ascii=False)
