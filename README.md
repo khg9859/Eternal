@@ -17,7 +17,7 @@
 |---------------|-------------|-----------|
 | `respondents` | `mb_sn`, `profile_vector` | 고유 패널 번호(`mb_sn`), 프로필 벡터(`p_vector`) |
 | `answers` | `answer_id`, `mb_sn`, `question_id`, `answer_value`, `a_vector` | 응답 식별자, 응답자 번호, 코드북 내 문항 번호, 답변값, 답변 임베딩 |
-| `metadata` | `metadata_id`, `mb_sn`, `mobile_carrier`, `gender`, `age`, `region` | 인구통계 메타데이터 (이동통신사, 성별, 연령, 지역 등) |
+| `metadata` | `metadata_id`, `mb_sn`, `mobile_carrier`, `gender`, `birth_year`,`age`, `region` | 인구통계 메타데이터 (이동통신사, 성별, 태어난해, 연령, 지역 등) |
 | `codebooks` | `codebook_id`, `codebook_data (jsonb)`, `q_vector` | 코드북 파일 ID, 문항 내용(JSON 형식), 문항 임베딩 벡터 |
 
 ---
@@ -60,7 +60,8 @@ INPUT_FOLDER = os.getenv('INPUT_PATH')
 | **파일명** | **수정 항목** |
 |-------------|---------------|
 | `insert_1st.py`, `insert_2nd.py` | 데이터 파일 경로 및 파일명, DB 설정값 |
-| `insert2db2.py` | 실행 경로 기준으로 파일 경로 및 DB 설정값 수정 |
+| `insert_qpoll.py` | 실행 경로 기준으로 파일 경로 및 DB 설정값 수정 |
+| `drop_table.py` | DB초기화(모든 테이블 DROP)|
 
 ---
 
@@ -78,3 +79,44 @@ python ./embedding/profileVector.py
 
 psql 환경에서 데이터가 정상적으로 삽입되고
 임베딩(p_vector, a_vector, q_vector)이 잘 생성되었는지 확인합니다.
+
+### 6️⃣ 다중 조건 필터 & 의미기반 질의(semantic query) 파싱 기능
+테스트 
+``` bash
+python ./Data/search/parsing.py
+
+* 예시로 들어간 테스트 문이 json화 된 필터:json 와 질의: str를 분리하여 반환함.* 
+{
+  "filters": [
+    {
+      "column": "region",
+      "operator": "LIKE",
+      "value": "서울%"
+    },
+    {
+      "column": "region",
+      "operator": "LIKE",
+      "value": "경기도%"
+    },
+    {
+      "column": "age",
+      "operator": ">=",
+      "value": "40"
+    },
+    {
+      "column": "age",
+      "operator": "<",
+      "value": "50"
+    },
+    {
+      "column": "gender",
+      "operator": "=",
+      "value": "여성"
+    },
+    {
+      "column": "mobile_carrier",
+      "operator": "=",
+      "value": "SKT"
+    }
+  ],
+  "semantic_query": "문화생활 만족도"
