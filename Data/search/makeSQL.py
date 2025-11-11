@@ -1,9 +1,8 @@
-#!/usr/bin/env python
+
 # -*- coding: utf-8 -*-
 
 """
-Metadata 필터링을 위한 SQL WHERE 절 생성기 (v1.0)
-... (기존 주석 동일) ...
+Metadata 필터링을 위한 SQL WHERE 절 생성기
 """
 
 from collections import defaultdict
@@ -11,9 +10,7 @@ from collections import defaultdict
 def build_metadata_where_clause(filters_list, table_name="metadata"):
     """
     필터 리스트(JSON)를 기반으로 SQL WHERE 절과 파라미터를 생성합니다.
-    ... (기존 함수 내용 동일) ...
     """
-    
     if not filters_list:
         return "", []
 
