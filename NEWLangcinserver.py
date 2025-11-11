@@ -3,8 +3,9 @@ import sys
 import json
 from typing import List, Dict, Any, Tuple, Literal, Optional
 from datetime import datetime
+from collections import deque # deque는 사용되지 않으나, 이전 CACHE 로직 흔적으로 유지 (사용자 코드를 따름)
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv # 환경 변수 로드 추가
 # OpenAI 클라이언트만 사용
 from openai import OpenAI
 import numpy as np 
@@ -24,22 +25,30 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores.pgvector import PGVector 
 
 
-# 환경 변수 로드
-load_dotenv() 
+# 환경 변수 로드 (main.py 외 단독 실행 시를 대비해 여기서도 로드)
+load_dotenv(find_dotenv()) 
 
 # ====================================================================
 # 1. 설정 및 모델 정의 (Settings & Definitions)
 # ====================================================================
 
 KURE_MODEL_NAME = "nlpai-lab/KURE-v1" 
-CONNECTION_STRING = os.getenv("PG_CONNECTION_STRING")
-COLLECTION_NAME = "panel_data_kure_v1" 
+# --- (수정) PGVector 연결 문자열 구성 (환경 변수 사용) ---
+DB_HOST = os.getenv('DB_HOST')
+DB_PORT = os.getenv('DB_PORT')
+DB_NAME = os.getenv('DB_NAME')
+DB_USER = os.getenv('DB_USER')
+DB_PASSWORD = os.getenv('DB_PASSWORD')
+
+# PGVector 연결 문자열 (DB 보안을 위해 환경 변수 사용)
+CONNECTION_STRING = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# ------------------------------------------------------------------
 
 # --- 모델 변경 및 역할 정의 (GPT-5로 통일) ---
 OPENAI_GPT5_MODEL = "gpt-5-standard"             # Reranker, 프로필 추출, 라우팅, CHAT 답변 모두 담당
 ANTHROPIC_DECODER_MODEL = "claude-3-opus-20240229" # 최종 답변 생성 (Opus 유지)
-RETRIEVAL_K = 20                                 # 1차 검색에서 가져올 문서 수
-FINAL_K = 3                                      # 최종 선별할 문서 수 (Opus Context)
+RETRIEVAL_K = 20 
+FINAL_K = 3
 
 # --- 메모리 저장소 (RAM) 및 문서 재참조 정책 설정 ---
 store = {} 
@@ -80,8 +89,6 @@ def set_last_rag_docs(session_id: str, docs: List[Any]):
     formatted_docs = []
     # 정책: 최종 K개 문서만 저장
     for doc in docs[:STORED_DOC_LIMIT]: 
-        # LangChain Document 객체 대신 필요한 텍스트와 메타데이터만 저장
-        # doc이 LangChain Document 객체일 수도 있고, Dict일 수도 있음 (안전한 접근)
         page_content = getattr(doc, 'page_content', doc.get('page_content', ''))
         metadata = getattr(doc, 'metadata', doc.get('metadata', {}))
         
@@ -156,7 +163,7 @@ def extract_profile_query(query: str) -> str:
         response = openai_client.invoke(profile_extraction_prompt)
         return response.content.strip().replace('"', '')
     except Exception as e:
-        print(f"[WARN] 프로필 쿼리 추출 실패: {e}. 원본 쿼리를 대신 사용합니다.")
+        print(f"[WARN] 프로필 쿼리 추출 실패: {e}.")
         return query 
 
 # 2.1. 재순위 지정(Re-ranking) 함수 정의 (GPT-5 Standard 사용)
@@ -167,7 +174,7 @@ def rerank_with_openai(query: str, retrieved_docs: List[Any], final_k: int = FIN
     if not retrieved_docs:
         return []
 
-    # 1. 재순위 지정을 위한 컨텍스트 및 ID 목록 생성
+    # 1. 재순위 지정을 위한 컨텍스트 및 ID 목록 생성 (로직 생략)
     ranked_context = "\n\n--- 문서 목록 ---\n\n"
     id_map = {}
     
@@ -216,6 +223,7 @@ def get_multistage_retriever(query: str):
     """
     (0)프로필추출 -> (1)profile_vector -> (2)q_vector -> (3)a_vector를 모두 사용하는 최종 Retriever (PGVector 사용)
     """
+    # NOTE: 이 함수는 RAG 경로일 때만 호출되므로, 비용 효율적임
     print(f"\n[DEBUG] Full RAG 검색 프로세스 시작. 원본 쿼리: {query}")
 
     # 0단계: 사용자 질문에서 프로필 검색어 추출 (GPT-5 Standard 호출)
@@ -268,7 +276,7 @@ def get_multistage_retriever(query: str):
 # 2.3. RAG 체인 객체 구축 (Vector DB 연결)
 try:
     if not CONNECTION_STRING:
-        raise RuntimeError("PG_CONNECTION_STRING 환경 변수가 설정되지 않았습니다.")
+        raise RuntimeError("DB 연결 정보(환경 변수)가 올바르지 않습니다.")
 
     embedding_function = HuggingFaceEmbeddings(
         model_name=KURE_MODEL_NAME,
@@ -406,15 +414,9 @@ def handle_user_query(query: str, session_id: str, mode: str = "conv") -> str:
                 context_str = format_docs(stored_docs)
                 
                 # Hybrid Cache Chain 호출 (Opus 사용, Context는 메모리에서 재참조)
-                hybrid_response = final_rag_chain.invoke({
-                    "context": context_str, # NOTE: final_rag_chain은 RunnableWithMessageHistory이므로, context를 context로 전달해야 함
-                    "question": query,
-                    "history": "\n".join([f"- {msg.type}: {msg.content}" for msg in chat_history])
-                }, config=config) # Context를 final_rag_chain에 직접 전달하기 위해 수정 필요 (core_rag_chain을 직접 호출하는 것이 더 나음)
-                
-                # 안전을 위해 core_rag_chain을 직접 호출하여 history를 수동으로 제공
                 history_str = "\n".join([f"User: {m.content}" if m.type == 'human' else f"AI: {m.content}" for m in chat_history])
                 
+                # NOTE: core_rag_chain을 직접 호출하여 context와 history를 수동으로 제공
                 hybrid_response = core_rag_chain.invoke({
                      "context": context_str,
                      "question": query,
@@ -434,9 +436,8 @@ def handle_user_query(query: str, session_id: str, mode: str = "conv") -> str:
             # Full RAG Chain 실행 (내부적으로 get_multistage_retriever 호출)
             response = final_rag_chain.invoke({"question": query}, config=config)
             
-            # --- (수정) Full RAG 실행 후 문서 저장 (재참조 정책 반영) ---
-            # NOTE: RAG 체인 실행 중 검색된 문서를 저장해야 하므로, get_multistage_retriever의 최종 결과를 저장합니다.
-            # RAG 체인은 context를 바로 LLM으로 보내므로, get_multistage_retriever를 다시 호출하여 최종 문서를 가져옵니다.
+            # --- Full RAG 실행 후 문서 저장 (재참조 정책 반영) ---
+            # NOTE: RAG 체인 실행 중 검색된 문서를 저장해야 하므로, get_multistage_retriever를 다시 호출하여 최종 문서를 가져옵니다.
             final_docs_for_storage = get_multistage_retriever(query) 
             if final_docs_for_storage:
                  set_last_rag_docs(session_id, final_docs_for_storage)
