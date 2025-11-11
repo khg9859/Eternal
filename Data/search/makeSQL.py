@@ -31,7 +31,7 @@ def build_metadata_where_clause(filters_list, table_name="metadata"):
     all_conditions = []  # 최종 AND로 결합될 조건 그룹
     all_parameters = []  # SQL 파라미터 (순서 중요)
 
-    # SQL Injection을 막기 위한 허용된 연산자 목록
+    # SQL Injection을 막기 위한 허용된 연산자 목록 >> 사실 우리 수준에서 보안 신경 안쓰면 더 많은 연산자를 추가해도 됌...
     ALLOWED_OPERATORS = {'=', '!=', 'LIKE', '>', '>=', '<', '<='}
 
     # 2. 그룹화된 필터 순회 (예: 'region' 그룹, 'age' 그룹)
@@ -128,8 +128,6 @@ if __name__ == '__main__':
     # RAG 실행기(Executor)는 이 두 값을 조합하여 최종 쿼리를 만듭니다.
     # (예시: 여기서는 응답자 ID(mb_sn)만 가져옵니다)
     
-    # RAG 실행기는 파서로부터 'semantic_query'도 받지만,
-    # 이 쿼리는 metadata 필터링이 끝난 후 answers 테이블을 검색하는 데 사용됩니다.
     # 여기서는 metadata 테이블을 필터링하는 부분만 보여줍니다.
     
     final_sql_query = f"SELECT mb_sn FROM metadata {where_sql};"
