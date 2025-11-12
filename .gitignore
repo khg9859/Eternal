@@ -9,3 +9,6 @@ Data/db_insert/panelData/*.csv
 !Data/db_insert/panelData/wel_2ndex.csv
 Data/db_insert/panelData/exceptFile
 .env
+package-lock.json
+package.json
+node_modules
