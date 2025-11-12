@@ -1,374 +1,319 @@
-import os
-import sys
-import json
+# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
+"""
+Hybrid RAG (SQL + pgvector) — Schema-specific single file
+
+Tables
+- metadata(metadata_id PK, mb_sn, mobile_carrier, gender, birth_year, age, region)
+- codebooks(codebook_id PK, codebook_data JSON/JSONB, q_vector VECTOR)
+- answers(answer_id PK, mb_sn, question_id, answer_value, a_vector VECTOR)
+
+Flow
+1) gpt-4o-mini로 사용자 문장을 filters(JSON) + semantic_query로 분리
+2) filters로 metadata WHERE 만들어 mb_sn 화이트리스트 취득
+3) semantic_query 임베딩 → codebooks.q_vector와 유사도 검색해 question_id 1~N개 선택
+4) answers에서 (question_id ∈ 선택집합) AND (mb_sn ∈ 화이트리스트) 교차 필터
+   + a_vector와 semantic_query 임베딩 유사도로 정렬
+5) (선택) gpt-4o-mini로 재랭킹 후 요약 생성
+"""
+
+import os, json, re
 from typing import List, Dict, Any, Tuple
+from collections import defaultdict
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv(), override=True)
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
 from openai import OpenAI
-import numpy as np # 벡터 재정렬 및 비교에 필요
+from sentence_transformers import SentenceTransformer
+import numpy as np
 
-# --- RAG CORE COMPONENTS ---
-from langchain_core.runnables import RunnablePassthrough 
-from langchain_core.prompts import PromptTemplate 
-from langchain_core.output_parsers import StrOutputParser 
-from langchain_community.chat_message_histories import ChatMessageHistory
-from langchain_core.runnables.history import RunnableWithMessageHistory
+# -----------------------
+# ENV
+# -----------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY missing")
+oai = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- LLM, EMBEDDINGS, VECTOR STORE ---
-from langchain_anthropic import ChatAnthropic # Claude LLM (Decoder)
-from langchain_openai import ChatOpenAI # ✨ OpenAI Tool Call 및 Reranker에 사용
-from langchain_community.embeddings import HuggingFaceEmbeddings # KURE-v1 (Encoder)
-from langchain_community.vectorstores.pgvector import PGVector 
-
-
-# 환경 변수 로드
-load_dotenv() 
-
-# ====================================================================
-# 1. 설정 및 모델 정의 (Settings & Definitions)
-# ====================================================================
-
-KURE_MODEL_NAME = "nlpai-lab/KURE-v1" 
-CONNECTION_STRING = os.getenv("PG_CONNECTION_STRING")
-COLLECTION_NAME = "panel_data_kure_v1" 
-
-# --- 재순위 지정 설정 ---
-OPENAI_RERANKER_MODEL = os.getenv("CHAT_MODEL", "gpt-4o-mini") # 재순위 지정에 사용할 OpenAI 모델
-RETRIEVAL_K = 20 # 1차 검색(KURE)에서 가져올 넓은 후보군 수
-FINAL_K = 3      # 재순위 지정 후 최종적으로 사용할 문서 수
-
-# --- 메모리 저장소 (RAM) ---
-store = {} 
-
-def get_session_history(session_id: str) -> ChatMessageHistory:
-    if session_id not in store:
-        store[session_id] = ChatMessageHistory()
-    return store[session_id]
-
-def get_kure_embedding():
-    """RAG Encoder: KURE-v1 모델을 로드하여 임베딩 함수를 반환합니다."""
-    return HuggingFaceEmbeddings(
-        model_name=KURE_MODEL_NAME,
-        model_kwargs={'device': 'cpu'} 
-    )
-
-def get_llm():
-    """RAG Decoder: Claude LLM을 정의합니다."""
-    # Claude가 최종 답변을 생성하는 Decoder 역할
-    return ChatAnthropic(model="claude-3-haiku-20240307", temperature=0.1)
-
-
-# --- LLM 디자이너가 최종 결정한 프롬프트 템플릿 ---
-RAG_PROMPT = PromptTemplate(
-    input_variables=["question", "context", "history"], 
-    template="""
-        Human: 
-        당신은 전문 AI 데이터 비서입니다. 이전 대화 내역과 아래 지시사항을 참고하여 답변하세요.
-
-        [이전 대화 기록]:
-        {history} 
-        
-        아래 지시사항을 따르세요:
-        1. 질문에 오탈자가 있다면 표준어로 교정하고, 모호하면 구체적인 키워드로 질문을 재작성 후 검색 결과에 적용.
-        2. '참고 문서'에 없는 정보는 절대 사용 금지.
-        3. 질문에 대한 핵심 정보만 요약하여, 서론/결론 없이 바로 시작.
-        4. 검색 결과가 부족하면 "죄송하지만, 검색된 문서로는 질문에 대한 충분한 정보를 찾을 수 없습니다."라고 응답.
-
-        [질문]:
-        {question}
-        
-        [참고 문서 - Vector DB 검색 결과]:
-        {context}
-        
-        Assistant:
-    """
+DB = dict(
+    host=os.getenv("DB_HOST"),
+    port=int(os.getenv("DB_PORT", "5432")),
+    dbname=os.getenv("DB_NAME"),
+    user=os.getenv("DB_USER"),
+    password=os.getenv("DB_PASSWORD"),
 )
 
-def format_docs(docs):
-    """검색된 Document 객체의 page_content만 추출하여 문자열로 포맷합니다."""
-    return "\n\n".join([doc.page_content for doc in docs])
+# 임베딩 모델 (KURE)
+EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "nlpai-lab/KURE-v1")
+_device = "cuda" if os.getenv("USE_CUDA", "0") == "1" else "cpu"
+_embedder = SentenceTransformer(EMB_MODEL_NAME, device=_device)
 
+# pgvector: cosine 연산자 사용시 '<=>' (인덱스는 vector_cosine_ops)
+PGVECTOR_OP = "<=>"   # L2면 '<->' 로 교체
 
-# ====================================================================
-# 2. RAG 체인 객체 구축 (KURE-v1 검색 + OpenAI 재순위 지정 통합)
-# ====================================================================
+# -----------------------
+# 1) 자연어 → (filters, semantic_query)
+# -----------------------
+SYSTEM_PROMPT = """
+너는 PostgreSQL 기반 질의 분석기다.
+아래 스키마에 맞춰 사용자의 요청을 두 조각으로 분해해 JSON만 반환하라:
+- filters: [{column, operator, value}]  (metadata 테이블 컬럼만 사용)
+- semantic_query: string (의미 검색용 핵심 키워드/문장)
 
-# 툴콜에 필요한 OpenAI 클라이언트 (재순위 지정에도 사용)
-openai_client = ChatOpenAI(model=OPENAI_RERANKER_MODEL, temperature=0.0)
+컬럼: gender('남성'/'여성'), age(INT), birth_year(INT),
+      region(VARCHAR, 예:'서울', '서울특별시', '경기', '경기도 광주시' 등 시작 일치),
+      mobile_carrier('SKT','KT','LGU+','Wiz')
 
-def extract_profile_query(query: str) -> str:
-    """LLM을 사용해 전체 질문에서 프로필 관련 키워드만 추출합니다."""
-    
-    profile_extraction_prompt = f"""사용자의 전체 질문에서 '사람'의 특징을 설명하는 핵심 키워드만 추출하여 간결한 구(phrase)로 만들어주세요. 다른 설명은 절대 추가하지 마세요.
+규칙:
+- "30대" → age >= 30 AND age < 40
+- "1990년대생" → birth_year >= 1990 AND birth_year < 2000
+- "서울" → region LIKE '서울%'
+- 스키마 밖(결혼, 직업 등)은 filters에 넣지 말고 semantic_query에만 남겨라.
+반드시 {"filters":[...], "semantic_query": "..."} 만 출력.
+"""
 
-질문: "서울에 사는 성인 남성은 보통 건강을 위해 어떤 운동을 많이 해?"
-출력: 서울 거주 성인 남성
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "filters": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "column": {"type": "string"},
+                    "operator": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": ["column", "operator", "value"]
+            }
+        },
+        "semantic_query": {"type": "string"}
+    },
+    "required": ["filters", "semantic_query"]
+}
 
-질문: "부산에 사는 20대 여성 중, OTT를 유료 구독하는 사람"
-출력: 부산 거주 20대 여성
-
-질문: "{query}"
-출력:"""
-
+def parse_query(user_query: str) -> dict:
+    resp = oai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_query},
+        ],
+        tools=[{
+            "type": "function",
+            "function": {
+                "name": "extract",
+                "description": "사용자 요청을 filters/semantic_query로 분해",
+                "parameters": SCHEMA
+            }
+        }],
+        tool_choice={"type": "function", "function": {"name": "extract"}},
+        temperature=0.0
+    )
     try:
-        response = openai_client.invoke(profile_extraction_prompt)
-        profile_query = response.content.strip()
-        # LLM이 혹시 따옴표를 붙여서 출력할 경우를 대비해 제거
-        return profile_query.replace('"', '')
-    except Exception as e:
-        print(f"[WARN] 프로필 쿼리 추출 실패: {e}. 원본 쿼리를 대신 사용합니다.")
-        return query # 실패 시 원본 쿼리 사용
+        tool = resp.choices[0].message.tool_calls[0]
+        return json.loads(tool.function.arguments)
+    except Exception:
+        return {"filters": [], "semantic_query": user_query}
 
-# 2.1. 재순위 지정(Re-ranking) 함수 정의
-def rerank_with_openai(query: str, retrieved_docs: List[Any], final_k: int = FINAL_K) -> List[Any]:
-    """
-    KURE-v1이 검색한 Top-N 문서를 OpenAI의 추론 능력을 사용해 최종 Top-K로 재정렬합니다.
-    """
-    if not retrieved_docs:
-        return []
+# -----------------------
+# 2) filters → metadata WHERE
+# -----------------------
+ALLOWED_COLS = {"gender","age","birth_year","region","mobile_carrier"}
+ALLOWED_OPS  = {"=","!=","LIKE",">",">=","<","<="}
 
-    # 1. 재순위 지정을 위한 컨텍스트 및 ID 목록 생성
-    ranked_context = "\n\n--- 문서 목록 ---\n\n"
-    id_map = {}
-    
-    # Simple RAG: Document 객체를 Dictionary로 변환하여 사용해야 함 (PageContent와 Metadata 사용)
-    for i, doc in enumerate(retrieved_docs):
-        doc_id = f"DOC_{i:03d}"
-        id_map[doc_id] = doc # 원본 Document 객체 저장
-        
-        # 문서 내용 추출 및 포맷팅
-        page_content = doc.page_content.replace('\n', ' ')[:150] # 150자만 요약
-        ranked_context += f"[[{doc_id}]] - 내용 요약: {page_content}...\n"
-    
-    # 2. LLM에게 재순위 지정 요청 프롬프트 작성
-    rerank_prompt = f"""
-    아래 '질문'과 '문서 목록'을 분석하여, 질문에 답변하는 데 가장 관련성이 높은 {final_k}개의 문서 ID를 **높은 순서대로만** 골라 JSON 배열 형태로 반환하세요.
-    반드시 문서 목록에 있는 ID만 사용하며, 다른 설명이나 텍스트는 일절 포함하지 마십시오.
-    출력 형식: {{"ids": ["DOC_001", "DOC_002", ...]}}
+def build_where(filters: List[Dict[str,str]]) -> Tuple[str, list]:
+    if not filters: return "", []
+    conds, params = [], []
+    for f in filters:
+        c, op, v = f["column"], f["operator"], f["value"]
+        if c not in ALLOWED_COLS or op not in ALLOWED_OPS: 
+            continue
+        conds.append(f"{c} {op} %s")
+        params.append(v)
+    return (" WHERE " + " AND ".join(conds), params) if conds else ("", [])
 
-    [질문]
-    {query}
+# -----------------------
+# 3) DB util
+# -----------------------
+def db_conn():
+    return psycopg2.connect(**DB, cursor_factory=RealDictCursor)
 
-    [문서 목록]
-    {ranked_context}
-    """
-    
-    # 3. OpenAI 호출 및 결과 파싱
-    try:
-        response = openai_client.invoke(
-            rerank_prompt,
-            response_format={"type": "json_object"} # JSON 출력을 강제
+# -----------------------
+# 4) 벡터 유틸
+# -----------------------
+def embed(text: str) -> np.ndarray:
+    if not text: text = "general preference"
+    v = _embedder.encode([text], normalize_embeddings=True)[0]  # cosine용 정규화
+    return v.astype(np.float32)
+
+# -----------------------
+# 5) 파이프라인
+# -----------------------
+def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, topn_return: int = 10) -> Dict[str,Any]:
+    print(f"\n{'='*25}\n[ RAG 파이프라인 시작 ]\n- 사용자 질문: \"{user_query}\"\n{'='*25}")
+
+    # 1단계: 자연어 질의 분석 (LLM 호출)
+    print("\n[ 1단계: 자연어 질의 분석 ]")
+    parsed = parse_query(user_query)
+    filters = parsed.get("filters", [])
+    semantic_query = parsed.get("semantic_query", "").strip()
+    print(f"  - 분석 결과 (Filters): {json.dumps(filters, ensure_ascii=False)}")
+    print(f"  - 분석 결과 (Semantic Query): \"{semantic_query}\"")
+
+    # 5-1) 메타데이터 필터로 mb_sn 화이트리스트
+    print("\n[ 2단계: 메타데이터 필터링 ]")
+    where_sql, params = build_where(filters)
+    mb_list = []
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT mb_sn FROM metadata{where_sql};", params)
+        mb_list = [r["mb_sn"] for r in cur.fetchall()]
+    mb_set = set(mb_list)
+    print(f"  - 실행된 SQL: SELECT mb_sn FROM metadata{where_sql};")
+    print(f"  - SQL 파라미터: {params}")
+    print(f"  - 찾은 응답자 수: {len(mb_set)}명")
+    if len(mb_set) > 0:
+        print(f"  - 찾은 응답자 샘플: {list(mb_set)[:5]}...")
+
+    # 5-2) semantic_query 임베딩 → codebooks.q_vector 검색해 question_id 상위 k
+    print("\n[ 3단계: 관련 질문 검색 ]")
+    q_vec = embed(semantic_query)
+    print(f"  - Semantic Query를 벡터로 변환 완료 (차원: {len(q_vec)})")
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT codebook_id
+            FROM codebooks
+            ORDER BY q_vector {PGVECTOR_OP} %s::vector
+            LIMIT %s;
+            """,
+            (q_vec.tolist(), k_questions)
         )
-        
-        content = response.content.strip()
-        
-        # '{"ids": [...]}' 형태의 JSON 파싱
-        reranked_data = json.loads(content)
-        reranked_ids = reranked_data.get("ids", []) 
+        qids = [r["codebook_id"] for r in cur.fetchall()]
+    print(f"  - 가장 관련성 높은 질문 ID {len(qids)}개 찾음: {qids}")
 
-        # 재정렬된 ID 순서에 따라 최종 결과 목록 생성
-        final_list = [id_map[doc_id] for doc_id in reranked_ids if doc_id in id_map]
-                
-        # 최종 K개만 반환
-        return final_list[:final_k]
-    
-    except Exception as e:
-        print(f"[RERANK] OpenAI API 호출 또는 파싱 오류: {e}")
-        # API 오류 시, 1차 검색 결과를 그대로 반환 (안전 폴백)
-        return retrieved_docs[:final_k]
+    if not qids:
+        return {"answer": "관련 질문을 찾지 못했습니다.", "filters": filters, "semantic_query": semantic_query, "question_ids": [], "sources": []}
 
-
-# 2.2. 사용자 정의 Retriever 함수 (0->1->2->3 Stage)
-def get_multistage_retriever(query: str):
-    """(0)프로필추출 -> (1)profile_vector -> (2)q_vector -> (3)a_vector를 모두 사용하는 최종 Retriever"""
-    print(f"\n[DEBUG] 전체 검색 프로세스 시작. 원본 쿼리: {query}")
-
-    # 0단계: 사용자 질문에서 프로필 검색어 추출
-    profile_query = extract_profile_query(query)
-    print(f"[DEBUG] 0단계: 프로필 검색어 추출 완료: '{profile_query}'")
-
-    # 1단계: profile_vector로 관련성 높은 응답자 후보군(mb_sn) 추출
-    candidate_docs = profile_retriever.invoke(profile_query) # 추출된 프로필 쿼리 사용
-    candidate_mb_sn_set = set([doc.metadata.get('mb_sn') for doc in candidate_docs if 'mb_sn' in doc.metadata])
-    if not candidate_mb_sn_set:
-        print("[DEBUG] 1단계: 관련 응답자 후보군을 찾지 못했습니다.")
-        return []
-    print(f"[DEBUG] 1단계: 응답자 후보군 {len(candidate_mb_sn_set)}명 발견.")
-
-    # 2단계: q_vector로 가장 관련성 높은 설문 문항(question_id) 추출
-    relevant_question_docs = q_retriever.invoke(query) # 여기서는 원본 쿼리 사용
-    if not relevant_question_docs:
-        print("[DEBUG] 2단계: 관련 설문 문항을 찾지 못했습니다.")
-        return []
-    question_id = relevant_question_docs[0].metadata.get('codebook_id')
-    if not question_id:
-        print("[DEBUG] 2단계: 설문 문항의 ID(codebook_id)를 찾지 못했습니다.")
-        return []
-    print(f"[DEBUG] 2단계: 관련 설문 문항 ID '{question_id}' 발견.")
-
-    # 3단계: a_vector 검색 (question_id로 1차 필터링)
-    a_retriever = a_vectorstore.as_retriever(
-        search_kwargs={
-            "k": 100, # 더 많은 후보군을 가져와서 수동 필터링
-            "filter": { "question_id": question_id }
-        }
-    )
-    docs_for_manual_filter = a_retriever.invoke(query) # 여기서는 원본 쿼리 사용
-    
-    # 3.5단계: 응답자 후보군(mb_sn)으로 2차 수동 필터링
-    final_docs_to_rerank = [doc for doc in docs_for_manual_filter if doc.metadata.get('mb_sn') in candidate_mb_sn_set]
-    print(f"[DEBUG] 3단계: 최종 필터링 후 {len(final_docs_to_rerank)}개 문서 확보.")
-
-    # 4단계: OpenAI로 최종 K개 재정렬
-    final_docs = rerank_with_openai(query, final_docs_to_rerank, final_k=FINAL_K)
-    print(f"[DEBUG] 4단계: 재정렬 후 최종 {len(final_docs)}개 문서 반환.")
-    
-    return final_docs
-
-
-# 2.3. RAG 체인 객체 구축 (2-Stage Retrieval)
-try:
-    if not CONNECTION_STRING:
-        raise RuntimeError("PG_CONNECTION_STRING 환경 변수가 설정되지 않았습니다.")
-
-    embedding_function = get_kure_embedding()
-    
-    # profile_vector 저장소: 응답자 후보군 추출용
-    profile_vectorstore = PGVector(
-        collection_name="respondents",
-        connection_string=CONNECTION_STRING,
-        embedding_function=embedding_function,
-    )
-    # q_vector 저장소: 질문 의도 파악용
-    q_vectorstore = PGVector(
-        collection_name="codebooks",
-        connection_string=CONNECTION_STRING,
-        embedding_function=embedding_function,
-    )
-    # a_vector 저장소: 상세 답변 검색용
-    a_vectorstore = PGVector(
-        collection_name="answers",
-        connection_string=CONNECTION_STRING,
-        embedding_function=embedding_function,
-    )
-    
-    # 1단계 검색용 profile_vector retriever
-    profile_retriever = profile_vectorstore.as_retriever(search_kwargs={"k": 50}) # 50명 후보군
-    # 2단계 검색용 q_vector retriever
-    q_retriever = q_vectorstore.as_retriever(search_kwargs={"k": 1}) # 관련 질문 1개
-
-except RuntimeError as e:
-    print(f"XXX PGVector 설정 오류: {e}")
-    sys.exit(1)
-except Exception as e:
-    print(f"XXX PGVector 접속 중 심각한 오류 발생: {e}")
-    sys.exit(1)
-
-
-# 2.4. core_rag_chain 정의 (메모리 없는 단발성 RAG)
-core_rag_chain = (
-    {
-        # 최종 문서를 문자열 컨텍스트로 포맷해서 프롬프트에 투입
-        "context": lambda x: format_docs(get_multistage_retriever(x['question'])),
-        "question": lambda x: x['question'],
-        "history": lambda x: x['history']
-    }
-    | RAG_PROMPT
-    | get_llm()
-    | StrOutputParser()
-)
-
-def rag_answer(query: str, session_id: str, mode: str = "conv") -> str:
-    """외부(백엔드)에서 바로 호출할 간편 함수"""
-    config = {"configurable": {"session_id": session_id}}
-    try:
-        if mode == "simple":
-            return core_rag_chain.invoke({"question": query, "history": ""})
+    # 5-3) answers에서 교차 필터 + a_vector 유사도 정렬
+    print("\n[ 4단계: 하이브리드 답변 검색 ]")
+    print(f"  - 검색 조건: 응답자 {len(mb_set)}명, 질문 ID {qids}")
+    with db_conn() as conn, conn.cursor() as cur:
+        if mb_set:
+            cur.execute(
+                f"""
+                SELECT answer_id, mb_sn, question_id, answer_value,
+                       a_vector {PGVECTOR_OP} %s::vector AS distance
+                FROM answers
+                WHERE question_id = ANY(%s) AND mb_sn = ANY(%s)
+                ORDER BY a_vector {PGVECTOR_OP} %s::vector
+                LIMIT %s;
+                """,
+                (q_vec.tolist(), qids, list(mb_set), q_vec.tolist(), k_answers)
+            )
         else:
-            return final_rag_chain.invoke({"question": query}, config=config)
-    except Exception as e:
-        return f"[오류] 서버 실행 오류: {e}"
+            cur.execute(
+                f"""
+                SELECT answer_id, mb_sn, question_id, answer_value,
+                       a_vector {PGVECTOR_OP} %s::vector AS distance
+                FROM answers
+                WHERE question_id = ANY(%s)
+                ORDER BY a_vector {PGVECTOR_OP} %s::vector
+                LIMIT %s;
+                """,
+                (q_vec.tolist(), qids, q_vec.tolist(), k_answers)
+            )
+        rows = cur.fetchall()
+    print(f"  - 검색된 답변 후보 수: {len(rows)}개")
 
-def rag_search_with_sources(query: str, session_id: str, mode: str = "conv") -> dict:
-    """
-    RAG 검색을 수행하고, 생성된 답변과 함께 참조된 소스 문서를 반환합니다.
-    """
-    # 1. 답변 생성 (기존 로직 재사용)
-    answer = rag_answer(query, session_id, mode)
+    if not rows:
+        return {"answer": "조건에 맞는 응답을 찾지 못했습니다.", "filters": filters, "semantic_query": semantic_query, "question_ids": qids, "sources": []}
 
-    # 답변 생성 중 오류가 발생했으면, 소스 검색 없이 바로 반환
-    if isinstance(answer, str) and answer.startswith("[오류]"):
-        return {"answer": answer, "sources": []}
-    
-    # 2. 소스 문서 검색 (새로운 2단계 검색 함수 호출)
-    sources = get_multistage_retriever(query)
-    
-    # Document 객체를 JSON으로 직렬화 가능한 형태로 변환
-    formatted_sources = []
-    for doc in sources:
-        formatted_sources.append({
-            "page_content": doc.page_content,
-            "metadata": doc.metadata
-        })
+    # 5-4) (선택) gpt-4o-mini 재랭킹: 상위 topn_return만 유지
+    print("\n[ 5단계: LLM 재랭킹 ]")
+    docs = [{"id": f"D{i:04d}", "text": f"[mb:{r['mb_sn']}] {r['question_id']} :: {r['answer_value']}"} for i, r in enumerate(rows)]
+    context = "\n".join(f"{d['id']}: {d['text']}" for d in docs)
+    print(f"  - {len(docs)}개의 답변 후보를 LLM에 전달하여 재랭킹 요청...")
 
-    return {"answer": answer, "sources": formatted_sources}
+    rank_prompt = f"""
+다음 문서 리스트에서 사용자 질문과 가장 관련 있는 상위 {topn_return}개 문서의 ID만 JSON으로 반환하라.
+형식: {{"ids": ["D0000","D0003", ...]}}
 
+[질문]
+{user_query}
 
-# 2.5. final_rag_chain 정의 (대화형 검색의 최종 체인)
-final_rag_chain = RunnableWithMessageHistory(
-    core_rag_chain,
-    get_session_history, 
-    input_messages_key="question",
-    history_messages_key="history",
-)
-
-
-# ====================================================================
-# 3. 간편 검색/대화형 검색 실행 함수 (서버 통합 지점)
-# ====================================================================
-
-def handle_user_query(query: str, session_id: str, mode: str = "conv") -> str:
-    """
-    서버의 요청을 받아 RAG 체인을 실행하고 답변을 반환하는 메인 실행 함수입니다.
-    """
-    
-    config = {"configurable": {"session_id": session_id}}
-    
+[문서]
+{context}
+"""
     try:
-        if mode == "simple":
-            # 간편 검색: 메모리 없는 core_rag_chain 사용
-            response = core_rag_chain.invoke({"question": query, "history": ""})
-        
-        else: # mode == "conv" (대화형 검색)
-            response = final_rag_chain.invoke({"question": query}, config=config)
-        
-        return response
+        rr = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": rank_prompt}],
+            temperature=0.0
+        )
+        text = rr.choices[0].message.content
+        ids = re.findall(r'D\d{4}', text or "")
+        keep = set(ids[:topn_return]) if ids else set(d["id"] for d in docs[:topn_return])
+        print(f"  - LLM이 선택한 최종 답변 ID: {sorted(list(keep))}")
+    except Exception:
+        keep = set(d["id"] for d in docs[:topn_return])
+        print(f"  - LLM 재랭킹 실패, 유사도 상위 {topn_return}개 선택: {sorted(list(keep))}")
 
-    except Exception as e:
-        print(f"Execution Error in handle_user_query: {e}")
-        return f"[오류] 서버 실행 오류: {e}"
+    final = [rows[int(d["id"][1:])] for d in docs if d["id"] in keep]
+    final_text = "\n".join(f"- mb_sn:{r['mb_sn']} | {r['question_id']} | {r['answer_value']}" for r in final)
 
+    # 5-5) 요약 생성 (선택)
+    print("\n[ 6단계: LLM 요약 생성 ]")
+    print(f"  - 최종 {len(final)}개 답변을 기반으로 요약 생성 요청...")
+    summary_prompt = f"""당신은 데이터 분석가입니다. 주어진 [응답 샘플]을 분석하여 사용자의 [질문]에 대한 답변을 생성해야 합니다.
 
-# ====================================================================
-# 4. (옵션) 테스트 코드
-# ====================================================================
+[역할]
+1. 응답 샘플에 나타난 활동들을 분석하고, 가장 자주 언급된 활동이 무엇인지 파악합니다.
+2. 언급된 횟수를 기반으로 순위를 매겨 목록 형태로 답변을 구성합니다.
+3. 분석 결과를 바탕으로 자연스러운 문장으로 요약하여 마무리합니다.
+4. 샘플에 없는 내용은 절대 언급하지 마세요.
+
+[질문]
+{user_query}
+
+[응답 샘플]
+{final_text}
+
+[답변 형식]
+서울 시민들이 주로 하는 체력 관리 활동은 다음과 같습니다.
+
+1. **(가장 많이 언급된 활동)**
+2. **(두 번째로 많이 언급된 활동)**
+3. **(세 번째로 많이 언급된 활동)**
+
+종합적으로 볼 때, 많은 분들이 (활동1)과 (활동2)를 통해 체력을 관리하고 있는 것으로 보입니다.
+"""
+    try:
+        summ = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": summary_prompt}],
+            temperature=0.2
+        )
+        answer = summ.choices[0].message.content
+        print("  - 요약 생성 완료.")
+    except Exception:
+        answer = "요약 생성 중 오류가 발생했지만, 관련 응답 샘플을 반환합니다."
+        print("  - 요약 생성 실패.")
+
+    return {
+        "answer": answer,
+        "filters": filters,
+        "semantic_query": semantic_query,
+        "question_ids": qids,
+        "samples": final[:topn_return]
+    }
+
+# quick manual test
 if __name__ == "__main__":
-    
-    # ... (테스트 쿼리 및 실행 로직 유지) ...
-    q1 = "서울 20대 남자 100명에 대한 정보를 요약해줘."
-    q2 = "경기 30~40대 남자 술을 먹은 사람 50명에 대한 정보를 요약해줘."
-    q3 = "서울, 경기 OTT 이용하는 젊은층 30명에 대한 정보를 요약해줘."
-
-    TEST_SESSION_ID = "test_session_multi_query" 
-    
-    print("--- 1. Q1 테스트 실행 (단발성 simple) ---")
-    answer_q1 = handle_user_query(q1, TEST_SESSION_ID, mode="simple")
-    print(f"답변: {answer_q1}")
-
-    print("\n--- 2. Q2 테스트 실행 (대화형 시작) ---")
-    answer_q2 = handle_user_query(q2, TEST_SESSION_ID, mode="conv") 
-    print(f"답변: {answer_q2}")
-
-    print("\n--- 3. Q3 테스트 실행 (대화형 후속 질문 - Q2 맥락 기억) ---")
-    answer_q3 = handle_user_query(q3, TEST_SESSION_ID, mode="conv")
-    print(f"답변: {answer_q3}")
+    q = "서울 사는 30대 남성 중 SKT 사용자들의 경제 만족도와 불만 요인을 요약해줘"
+    res = hybrid_answer(q)
+    print(json.dumps(res, ensure_ascii=False, indent=2))

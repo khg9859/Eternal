@@ -11,7 +11,7 @@ import json
 from typing import List, Optional
 import numpy as np
 
-from LLMlangchan import rag_search_with_sources
+from LLMlangchan import hybrid_answer
 
 app = FastAPI(title="Eternel API", description="자연어 질의 기반 패널 데이터 검색 API")
 
@@ -174,10 +174,10 @@ async def rag_search(req: RAGRequest):
     - session_id: 대화 세션 식별자
     """
     try:
-        # 항상 'conv' 모드로 답변과 소스 문서를 함께 받아옴
-        result = rag_search_with_sources(req.query, req.session_id, mode="conv")
+        # LLMlangchan의 hybrid_answer 함수를 호출합니다.
+        result = hybrid_answer(req.query)
         
-        # 프론트엔드에 필요한 모든 정보를 포함하여 반환
+        # 프론트엔드에 필요한 정보를 포함하여 반환
         return {
             "query": req.query,
             "session_id": req.session_id,
