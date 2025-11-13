@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
 """
 Hybrid RAG (SQL + pgvector) — Schema-specific single file
 
@@ -11,15 +10,14 @@ Tables
 Flow
 1) gpt-4o-mini로 사용자 문장을 filters(JSON) + semantic_query로 분리
 2) filters로 metadata WHERE 만들어 mb_sn 화이트리스트 취득
-3) semantic_query 임베딩 → codebooks.q_vector와 유사도 검색해 question_id 1~N개 선택
+3) semantic_query 임베딩 → codebooks.q_vector와 유사도 검색해 question_id 상위 k 선택
 4) answers에서 (question_id ∈ 선택집합) AND (mb_sn ∈ 화이트리스트) 교차 필터
    + a_vector와 semantic_query 임베딩 유사도로 정렬
-5) (선택) gpt-4o-mini로 재랭킹 후 요약 생성
+5) (선택) gpt-4o-mini로 재랭킹 후, filters/semantic_query/샘플10개를 종합해 서술형 요약 생성
 """
 
 import os, json, re
 from typing import List, Dict, Any, Tuple
-from collections import defaultdict
 
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv(), override=True)
@@ -52,7 +50,7 @@ EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "nlpai-lab/KURE-v1")
 _device = "cuda" if os.getenv("USE_CUDA", "0") == "1" else "cpu"
 _embedder = SentenceTransformer(EMB_MODEL_NAME, device=_device)
 
-# pgvector: cosine 연산자 사용시 '<=>' (인덱스는 vector_cosine_ops)
+# pgvector: cosine 연산자 사용시 '<=>'
 PGVECTOR_OP = "<=>"   # L2면 '<->' 로 교체
 
 # -----------------------
@@ -131,7 +129,7 @@ def build_where(filters: List[Dict[str,str]]) -> Tuple[str, list]:
     conds, params = [], []
     for f in filters:
         c, op, v = f["column"], f["operator"], f["value"]
-        if c not in ALLOWED_COLS or op not in ALLOWED_OPS: 
+        if c not in ALLOWED_COLS or op not in ALLOWED_OPS:
             continue
         conds.append(f"{c} {op} %s")
         params.append(v)
@@ -152,9 +150,57 @@ def embed(text: str) -> np.ndarray:
     return v.astype(np.float32)
 
 # -----------------------
-# 5) 파이프라인
+# 5) 객관식 번호 → 라벨(보기 텍스트) 변환 유틸
 # -----------------------
-def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, topn_return: int = 10) -> Dict[str,Any]:
+_MULTI_SEP = re.compile(r"[,\s]+")
+
+def _build_choice_map(codebook_data: dict) -> dict:
+    """
+    codebooks.codebook_data['answers']의 보기표를 {코드(str): 라벨(str)}로 변환
+    값키: qi_val / q_val / value
+    라벨키: qi_title / label / text / name
+    """
+    m = {}
+    if not codebook_data:
+        return m
+    items = codebook_data.get("answers") or []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        key = str(it.get("qi_val") or it.get("q_val") or it.get("value") or "").strip()
+        val = (it.get("qi_title") or it.get("label") or it.get("text") or it.get("name") or "").strip()
+        if key and val:
+            m[key] = val
+    return m
+
+def _translate_answer_value(raw_value: str, choice_map: dict) -> str:
+    """
+    "1,2,5" -> "경영/인사/총무/사무, 재무/회계/경리, ..."
+    중복 제거 + 순서 보존
+    """
+    if raw_value is None:
+        return ""
+    parts = [p for p in _MULTI_SEP.split(str(raw_value).strip()) if p]
+    labels = [choice_map.get(p, p) for p in parts]
+    seen, out = set(), []
+    for x in labels:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return ", ".join(out)
+
+def _attach_human_readable_labels(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    for r in rows:
+        cmap = _build_choice_map(r.get("codebook_data"))
+        r["answer_value_text"] = _translate_answer_value(r.get("answer_value"), cmap) if cmap else r.get("answer_value")
+        out.append(r)
+    return out
+
+# -----------------------
+# 6) 파이프라인
+# -----------------------
+def hybrid_answer(user_query: str, k_questions: int = 3, k_answers: int = 50, topn_return: int = 10) -> Dict[str,Any]:
     print(f"\n{'='*25}\n[ RAG 파이프라인 시작 ]\n- 사용자 질문: \"{user_query}\"\n{'='*25}")
 
     # 1단계: 자연어 질의 분석 (LLM 호출)
@@ -165,10 +211,9 @@ def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, to
     print(f"  - 분석 결과 (Filters): {json.dumps(filters, ensure_ascii=False)}")
     print(f"  - 분석 결과 (Semantic Query): \"{semantic_query}\"")
 
-    # 5-1) 메타데이터 필터로 mb_sn 화이트리스트
+    # 2단계: 메타데이터 필터 → mb_sn 화이트리스트
     print("\n[ 2단계: 메타데이터 필터링 ]")
     where_sql, params = build_where(filters)
-    mb_list = []
     with db_conn() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT mb_sn FROM metadata{where_sql};", params)
         mb_list = [r["mb_sn"] for r in cur.fetchall()]
@@ -179,7 +224,7 @@ def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, to
     if len(mb_set) > 0:
         print(f"  - 찾은 응답자 샘플: {list(mb_set)[:5]}...")
 
-    # 5-2) semantic_query 임베딩 → codebooks.q_vector 검색해 question_id 상위 k
+    # 3단계: 관련 질문 검색 (codebooks.q_vector 상위 k)
     print("\n[ 3단계: 관련 질문 검색 ]")
     q_vec = embed(semantic_query)
     print(f"  - Semantic Query를 벡터로 변환 완료 (차원: {len(q_vec)})")
@@ -199,18 +244,20 @@ def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, to
     if not qids:
         return {"answer": "관련 질문을 찾지 못했습니다.", "filters": filters, "semantic_query": semantic_query, "question_ids": [], "sources": []}
 
-    # 5-3) answers에서 교차 필터 + a_vector 유사도 정렬
+    # 4단계: answers 교차 필터 + a_vector 유사도 정렬 (+ codebooks 조인)
     print("\n[ 4단계: 하이브리드 답변 검색 ]")
     print(f"  - 검색 조건: 응답자 {len(mb_set)}명, 질문 ID {qids}")
     with db_conn() as conn, conn.cursor() as cur:
         if mb_set:
             cur.execute(
                 f"""
-                SELECT answer_id, mb_sn, question_id, answer_value,
-                       a_vector {PGVECTOR_OP} %s::vector AS distance
-                FROM answers
-                WHERE question_id = ANY(%s) AND mb_sn = ANY(%s)
-                ORDER BY a_vector {PGVECTOR_OP} %s::vector
+                SELECT a.answer_id, a.mb_sn, a.question_id, a.answer_value,
+                       a.a_vector {PGVECTOR_OP} %s::vector AS distance,
+                       c.codebook_data
+                FROM answers a
+                LEFT JOIN codebooks c ON a.question_id = c.codebook_id
+                WHERE a.question_id = ANY(%s) AND a.mb_sn = ANY(%s)
+                ORDER BY a.a_vector {PGVECTOR_OP} %s::vector
                 LIMIT %s;
                 """,
                 (q_vec.tolist(), qids, list(mb_set), q_vec.tolist(), k_answers)
@@ -218,11 +265,13 @@ def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, to
         else:
             cur.execute(
                 f"""
-                SELECT answer_id, mb_sn, question_id, answer_value,
-                       a_vector {PGVECTOR_OP} %s::vector AS distance
-                FROM answers
-                WHERE question_id = ANY(%s)
-                ORDER BY a_vector {PGVECTOR_OP} %s::vector
+                SELECT a.answer_id, a.mb_sn, a.question_id, a.answer_value,
+                       a.a_vector {PGVECTOR_OP} %s::vector AS distance,
+                       c.codebook_data
+                FROM answers a
+                LEFT JOIN codebooks c ON a.question_id = c.codebook_id
+                WHERE a.question_id = ANY(%s)
+                ORDER BY a.a_vector {PGVECTOR_OP} %s::vector
                 LIMIT %s;
                 """,
                 (q_vec.tolist(), qids, q_vec.tolist(), k_answers)
@@ -233,9 +282,14 @@ def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, to
     if not rows:
         return {"answer": "조건에 맞는 응답을 찾지 못했습니다.", "filters": filters, "semantic_query": semantic_query, "question_ids": qids, "sources": []}
 
-    # 5-4) (선택) gpt-4o-mini 재랭킹: 상위 topn_return만 유지
+    # 객관식 번호 → 라벨 텍스트 부착
+    rows = _attach_human_readable_labels(rows)
+
+    # 5단계: (선택) LLM 재랭킹 — 상위 topn_return 유지
     print("\n[ 5단계: LLM 재랭킹 ]")
-    docs = [{"id": f"D{i:04d}", "text": f"[mb:{r['mb_sn']}] {r['question_id']} :: {r['answer_value']}"} for i, r in enumerate(rows)]
+    docs = [{"id": f"D{i:04d}",
+             "text": f"[mb:{r['mb_sn']}] {r['question_id']} :: {r.get('answer_value_text') or r.get('answer_value') or ''}"} 
+            for i, r in enumerate(rows)]
     context = "\n".join(f"{d['id']}: {d['text']}" for d in docs)
     print(f"  - {len(docs)}개의 답변 후보를 LLM에 전달하여 재랭킹 요청...")
 
@@ -255,8 +309,8 @@ def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, to
             messages=[{"role": "user", "content": rank_prompt}],
             temperature=0.0
         )
-        text = rr.choices[0].message.content
-        ids = re.findall(r'D\d{4}', text or "")
+        text = rr.choices[0].message.content or ""
+        ids = re.findall(r'D\d{4}', text)
         keep = set(ids[:topn_return]) if ids else set(d["id"] for d in docs[:topn_return])
         print(f"  - LLM이 선택한 최종 답변 ID: {sorted(list(keep))}")
     except Exception:
@@ -264,33 +318,36 @@ def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, to
         print(f"  - LLM 재랭킹 실패, 유사도 상위 {topn_return}개 선택: {sorted(list(keep))}")
 
     final = [rows[int(d["id"][1:])] for d in docs if d["id"] in keep]
-    final_text = "\n".join(f"- mb_sn:{r['mb_sn']} | {r['question_id']} | {r['answer_value']}" for r in final)
 
-    # 5-5) 요약 생성 (선택)
+    # 6단계: 서술형 요약 생성 (filters + semantic_query + 샘플10개 종합)
     print("\n[ 6단계: LLM 요약 생성 ]")
-    print(f"  - 최종 {len(final)}개 답변을 기반으로 요약 생성 요청...")
-    summary_prompt = f"""당신은 데이터 분석가입니다. 주어진 [응답 샘플]을 분석하여 사용자의 [질문]에 대한 답변을 생성해야 합니다.
+    print(f"  - 최종 {len(final)}개 답변을 기반으로 서술형 요약 생성 요청...")
 
-[역할]
-1. 응답 샘플에 나타난 활동들을 분석하고, 가장 자주 언급된 활동이 무엇인지 파악합니다.
-2. 언급된 횟수를 기반으로 순위를 매겨 목록 형태로 답변을 구성합니다.
-3. 분석 결과를 바탕으로 자연스러운 문장으로 요약하여 마무리합니다.
-4. 샘플에 없는 내용은 절대 언급하지 마세요.
+    # 응답 내용만 전달 (번호/ID 제거, 라벨 사용)
+    final_text = "\n".join(f"- {r.get('answer_value_text') or r.get('answer_value') or ''}" for r in final)
+
+    summary_prompt = f"""
+당신은 데이터 분석가입니다. 아래의 조건과 응답 샘플을 참고해 사용자의 질문에 대해
+**짧고 자연스러운 서술형 요약**을 작성하세요. (불필요한 설명·목록·추측은 피하세요.)
+
+[조건]
+- filters: {json.dumps(filters, ensure_ascii=False)}
+- semantic_query: "{semantic_query}"
+
+[지침]
+1) 응답자 번호(ID)는 무시하고, answer_value의 내용만 분석합니다.
+2) 반복되거나 유사한 표현을 묶어 핵심 경향만 서술합니다.
+3) 과장 없이 사실 기반으로 한두 문단 이내로 요약합니다.
+4) 휴대폰·OTT·소비 행태 등 주제가 바뀌어도 같은 원칙으로 서술하세요.
 
 [질문]
 {user_query}
 
-[응답 샘플]
+[응답 샘플 10개]
 {final_text}
 
-[답변 형식]
-서울 시민들이 주로 하는 체력 관리 활동은 다음과 같습니다.
-
-1. **(가장 많이 언급된 활동)**
-2. **(두 번째로 많이 언급된 활동)**
-3. **(세 번째로 많이 언급된 활동)**
-
-종합적으로 볼 때, 많은 분들이 (활동1)과 (활동2)를 통해 체력을 관리하고 있는 것으로 보입니다.
+[출력 형식]
+한두 문단의 간결한 서술형 답변만 작성하세요. 번호 목록(1,2,3)은 쓰지 마세요.
 """
     try:
         summ = oai.chat.completions.create(
@@ -299,7 +356,7 @@ def hybrid_answer(user_query: str, k_questions: int = 2, k_answers: int = 50, to
             temperature=0.2
         )
         answer = summ.choices[0].message.content
-        print("  - 요약 생성 완료.")
+        print("  - 서술형 요약 생성 완료.")
     except Exception:
         answer = "요약 생성 중 오류가 발생했지만, 관련 응답 샘플을 반환합니다."
         print("  - 요약 생성 실패.")
