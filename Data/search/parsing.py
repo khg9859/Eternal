@@ -75,7 +75,7 @@ QUERY_JSON_SCHEMA = {
                 "properties": {
                     "column": {"type": "string", "description": "metadata 테이블의 컬럼명 (예: 'region', 'age')"},
                     "operator": {"type": "string", "description": "SQL 연산자 (예: '=', 'LIKE', '>=', '<')"},
-                    "value": {"type": "string", "description": "SQL WHERE 절에 사용할 값 (예: '서울%', '30')"}
+                    "value": {"type": "string", "description": "SQL WHERE 절에 사용할 값 (예: '서울%', '30','남성','여성','남자','여자')"}
                 },
                 "required": ["column", "operator", "value"]
             }
@@ -143,7 +143,7 @@ def parse_query_with_gpt(user_query: str) -> dict:
 if __name__ == "__main__":
     
     # [테스트 1] 하이브리드 쿼리 (필터 + 의미)
-    query1 = "서울이나 경기도에 거주하는 40대 여성 중 SKT를 사용하는 사람들의 문화생활 만족도는 어때?"
+    query1 = "서울에서 운동을 좋아하는 여자"
     result1 = parse_query_with_gpt(query1)
     print("--- [결과 1] ---")
     print(json.dumps(result1, indent=2, ensure_ascii=False))
