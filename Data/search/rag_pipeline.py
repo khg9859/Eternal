@@ -1,160 +1,389 @@
 # -*- coding: utf-8 -*-
 """
-RAG 쿼리 분해기 (Query Deconstructor)
+하이브리드 RAG 검색 파이프라인
 
-[목적]
-사용자의 자연어 입력을 받아, OpenAI의 gpt-4o-mini 모델을 사용해
-'metadata 필터링용 JSON'과 '벡터 검색용 텍스트'로 분리합니다.
-
-[필요 라이브러리]
-pip install openai python-dotenv
-
-[필요 .env 설정]
-OPENAI_API_KEY=sk-xxxxxxxxxxxx
+1. 사용자 쿼리 입력
+2. GPT로 쿼리 분해 (filters + semantic_query)
+3. Metadata 필터링 → respondent_ids
+4. Semantic query 임베딩 → 유사 질문 검색
+5. 필터링된 사람들의 답변 벡터 반환
 """
 
+import sys
 import os
-import json
-from openai import OpenAI
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from parsing import parse_query_with_gpt
+from makeSQL import build_metadata_where_clause
+
+import psycopg2
+import numpy as np
+import torch
+from transformers import AutoTokenizer, AutoModel
 from dotenv import load_dotenv, find_dotenv
+import json
 
-# --- 1. .env 파일 로드 및 OpenAI 클라이언트 초기화 ---
+# --- .env 파일 로드 ---
 load_dotenv(find_dotenv())
-API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not API_KEY:
-    print("XXX [오류] .env 파일에 'OPENAI_API_KEY'가 설정되지 않았습니다.")
-    exit()
+# --- 설정 ---
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME')
+DB_USER = os.getenv('DB_USER', 'postgres')
+DB_PASSWORD = os.getenv('DB_PASSWORD')
 
-client = OpenAI(api_key=API_KEY)
+EMBEDDING_DIMENSION = 1024
+TOP_K_QUESTIONS = 5
 
-
-# --- 2. LLM에게 전달할 시스템 프롬프트 및 스키마 정의 ---
-
-# [중요] LLM이 참조할 수 있도록, metadata 테이블의 스키마를 명확하게 정의합니다.
-METADATA_SCHEMA = """
-[Metadata Table Schema]
-- 'gender' (VARCHAR): '남성', '여성'
-- 'age' (INT): 39, 41 등 (만 나이)
-- 'birth_year' (INT): 1984, 1990 등 (출생년도)
-- 'region' (VARCHAR): '서울특별시 동대문구', '경기도 광주시', '경기', '서울' 등
-- 'mobile_carrier' (VARCHAR): 'SKT', 'KT', 'LGU+', 'Wiz'
-"""
-
-# [핵심] LLM이 따라야 할 지침
-SYSTEM_PROMPT = f"""
-당신은 PostgreSQL 기반의 하이브리드 검색 시스템을 위한 '쿼리 분석기'입니다.
-사용자의 자연어 입력을 받으면, [Metadata Table Schema]를 참고하여
-다음 두 가지 요소를 추출하는 JSON 객체를 반환해야 합니다.
-
-1. 'filters' (필터링 요소):
-   - [Metadata Table Schema]에 정의된 컬럼과 일치하는 모든 '정형 데이터' 조건입니다.
-   - '30대'는 'age' 컬럼에 대해 '>=' 30, '<' 40 조건으로 변환해야 합니다.
-   - '1990년대생'은 'birth_year' 컬럼에 대해 '>=' 1990, '<' 2000 조건으로 변환해야 합니다.
-   - '서울'은 'region' 컬럼에 대해 'LIKE' 연산자와 '서울%' 값으로 변환해야 합니다.
-   - 스키마에 없는 조건(예: '결혼', '자녀', '직업')은 'filters'에 절대 포함시키지 마십시오.
-
-2. 'semantic_query' (의미 검색어):
-   - 'filters'로 추출되고 남은, 사용자의 순수한 "의미적" 질의입니다.
-   - 만약 필터만 있고 의미 검색어가 없다면, 빈 문자열("")을 반환합니다.
-
-[Metadata Table Schema]
-{METADATA_SCHEMA}
-
-반드시 지정된 JSON 형식으로만 응답하십시오.
-"""
-
-# [중요] LLM이 반환할 JSON의 구조(Schema)를 OpenAI 'tools' 기능으로 정의
-QUERY_JSON_SCHEMA = {
+# --- 반환 데이터 스키마 ---
+RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "filters": {
+        "answer_data": {
             "type": "array",
+            "description": "검색된 답변 데이터 배열",
             "items": {
                 "type": "object",
                 "properties": {
-                    "column": {"type": "string", "description": "metadata 테이블의 컬럼명 (예: 'region', 'age')"},
-                    "operator": {"type": "string", "description": "SQL 연산자 (예: '=', 'LIKE', '>=', '<')"},
-                    "value": {"type": "string", "description": "SQL WHERE 절에 사용할 값 (예: '서울%', '30', '남성', '여성', '남자', '여자')"}
+                    "answer_id": {"type": "integer", "description": "답변 고유 ID"},
+                    "respondent_id": {"type": "string", "description": "응답자 ID (예: 'w243872155705518')"},
+                    "question_id": {"type": "string", "description": "질문 ID (예: '42', 'w2_Q5')"},
+                    "answer_value": {"type": "string", "description": "원본 답변 값 (예: '1', '2')"},
+                    "answer_text": {"type": "string", "description": "사람이 읽을 수 있는 답변 텍스트 (예: '엔지니어', '의사')"},
+                    "q_title": {"type": "string", "description": "질문 제목 (예: '전문직', '직업')"}
                 },
-                "required": ["column", "operator", "value"]
+                "required": ["answer_id", "respondent_id", "question_id", "answer_value", "answer_text", "q_title"]
             }
         },
-        "semantic_query": {
-            "type": "string",
-            "description": "필터링 요소를 제외한, 벡터 검색에 사용할 순수 의미 검색어 (예: '경제 만족도')"
+        "total_respondents": {
+            "type": "integer",
+            "description": "총 응답자 수 (중복 제거)"
+        },
+        "total_answers": {
+            "type": "integer",
+            "description": "총 답변 개수"
+        },
+        "unique_respondents": {
+            "type": "array",
+            "description": "응답자 ID 목록",
+            "items": {"type": "string"}
         }
     },
-    "required": ["filters", "semantic_query"]
+    "required": ["answer_data", "total_respondents", "total_answers", "unique_respondents"]
 }
 
-# --- 3. 쿼리 분해 함수 ---
-def parse_query_with_gpt(user_query: str) -> dict:
+# --- 헬퍼 함수 ---
+def clean_text_for_embedding(text):
+    """텍스트 정제"""
+    if not text:
+        return ""
+    return str(text).strip()
+
+def mean_pooling(model_output, attention_mask):
+    """Mean Pooling"""
+    token_embeddings = model_output[0]
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
+    sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+    return sum_embeddings / sum_mask
+
+# --- KURE 임베딩 모델 ---
+class KUREEmbeddingModel:
+    """KURE 임베딩 모델"""
+    def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[Info] '{self.device}' 디바이스 사용")
+        
+        self.tokenizer = AutoTokenizer.from_pretrained("nlpai-lab/KURE-v1")
+        self.model = AutoModel.from_pretrained("nlpai-lab/KURE-v1").to(self.device)
+        self.model.eval()
+        print("[Info] KURE 모델 로드 완료")
+    
+    def embed_query(self, query_text):
+        """단일 쿼리 임베딩"""
+        cleaned_text = clean_text_for_embedding(query_text)
+        
+        encoded_input = self.tokenizer(
+            [cleaned_text],
+            padding=True,
+            truncation=True,
+            return_tensors='pt',
+            max_length=512
+        ).to(self.device)
+        
+        with torch.no_grad():
+            model_output = self.model(**encoded_input)
+        
+        embedding = mean_pooling(model_output, encoded_input['attention_mask'])
+        return embedding.cpu().numpy()[0]
+
+# --- DB 연결 ---
+def connect_to_db():
+    """PostgreSQL 연결"""
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
+            user=DB_USER, password=DB_PASSWORD
+        )
+        return conn
+    except Exception as e:
+        print(f"[Error] DB 연결 실패: {e}")
+        return None
+
+# --- Step 1: Metadata 필터링 ---
+def filter_respondents_by_metadata(conn, filters):
+    """Metadata 필터로 respondent_ids 추출"""
+    if not filters:
+        print("[Step 1] 필터 없음 - 전체 응답자 대상")
+        return None
+    
+    print(f"\n[Step 1] Metadata 필터링 중... ({len(filters)}개 조건)")
+    
+    where_clause, params = build_metadata_where_clause(filters, table_name="metadata")
+    
+    if not where_clause:
+        return None
+    
+    query = f"SELECT mb_sn FROM metadata {where_clause};"
+    
+    cur = conn.cursor()
+    cur.execute(query, params)
+    results = cur.fetchall()
+    cur.close()
+    
+    respondent_ids = [row[0] for row in results]
+    print(f"[Result] {len(respondent_ids)}명의 응답자 필터링 완료")
+    
+    return respondent_ids
+
+# --- Step 2: 유사 질문 검색 ---
+def search_similar_questions(conn, query_vector, top_k=TOP_K_QUESTIONS):
+    """쿼리 벡터와 유사한 질문 찾기"""
+    print(f"\n[Step 2] 유사한 질문 상위 {top_k}개 검색 중...")
+    
+    cur = conn.cursor()
+    query = f"""
+        SELECT 
+            codebook_id,
+            codebook_data ->> 'q_title' AS q_title,
+            1 - (q_vector <=> %s::vector) AS similarity
+        FROM codebooks
+        WHERE q_vector IS NOT NULL
+        ORDER BY q_vector <=> %s::vector
+        LIMIT %s;
     """
-    gpt-4o-mini를 호출하여 사용자의 자연어 쿼리를
-    'filters'와 'semantic_query'로 분해합니다.
+    
+    vector_list = query_vector.tolist()
+    cur.execute(query, (vector_list, vector_list, top_k))
+    results = cur.fetchall()
+    cur.close()
+    
+    print(f"[Result] {len(results)}개의 유사 질문 발견:")
+    for codebook_id, q_title, similarity in results:
+        print(f"  - [{codebook_id}] {q_title[:50]}... (유사도: {similarity:.7f})")
+    
+    return [row[0] for row in results]
+
+# --- Step 3: 답변 통계 조회 (벡터 제외) ---
+def get_answer_statistics(conn, codebook_ids, respondent_filter=None):
+    """선정된 질문에 답변한 사람들의 통계 정보 반환 (a_vector 제외)"""
+    print(f"\n[Step 3] 답변 통계 조회 중...")
+    
+    cur = conn.cursor()
+    
+    # 필터링 조건
+    filter_clause = ""
+    params = [codebook_ids]  # 리스트 그대로 전달
+    
+    if respondent_filter:
+        filter_clause = "AND a.mb_sn = ANY(%s)"
+        params.append(respondent_filter)
+    
+    # a_vector 제거하고 조회
+    query = f"""
+        SELECT DISTINCT
+            a.answer_id,
+            a.mb_sn AS respondent_id,
+            a.question_id,
+            a.answer_value,
+            c.codebook_data ->> 'q_title' AS q_title,
+            c.codebook_data
+        FROM answers a
+        JOIN codebooks c ON a.question_id = c.codebook_id
+        WHERE a.question_id = ANY(%s)
+          {filter_clause}
+        ORDER BY a.mb_sn, a.question_id;
     """
-    print(f"\n>>> [GPT-4o-mini] 쿼리 분해 시도: \"{user_query}\"")
+    
+    cur.execute(query, params)
+    results = cur.fetchall()
+    cur.close()
+    
+    print(f"[Result] {len(results)}개의 답변 발견")
+    
+    # 응답자 수 계산
+    unique_respondents = set()
+    answer_data = []
+    
+    for row in results:
+        answer_id, respondent_id, question_id, answer_value, q_title, codebook_data = row
+        
+        unique_respondents.add(respondent_id)
+        
+        # 객관식 답변인 경우 보기 텍스트 매칭
+        answer_text = answer_value
+        if str(answer_value).isdigit() and codebook_data:
+            choices = codebook_data.get('answers', [])
+            if choices:  # 객관식
+                for choice in choices:
+                    if str(choice.get('qi_val')).strip() == str(answer_value).strip():
+                        answer_text = choice.get('qi_title', answer_value)
+                        break
+            else:  # 숫자형 (자녀수 등)
+                answer_text = f"{q_title}: {answer_value}"
+        
+        answer_data.append({
+            'answer_id': answer_id,
+            'respondent_id': respondent_id,
+            'question_id': question_id,
+            'answer_value': answer_value,
+            'answer_text': answer_text,  # 사람이 읽을 수 있는 텍스트
+            'q_title': q_title
+        })
+    
+    print(f"[Result] 총 {len(unique_respondents)}명의 응답자가 답변함")
+    
+    return {
+        'answer_data': answer_data,
+        'total_respondents': len(unique_respondents),
+        'total_answers': len(results),
+        'unique_respondents': list(unique_respondents)
+    }
+
+# --- 전체 RAG 파이프라인 ---
+def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True):
+    """
+    하이브리드 RAG 검색 파이프라인
+    
+    Args:
+        user_query: 사용자 자연어 쿼리
+        top_k: 유사 질문 상위 K개
+        use_gpt_parsing: GPT로 쿼리 분해 여부 (False면 전체를 semantic_query로 사용)
+    
+    Returns:
+        답변 데이터 리스트
+    """
+    print("=" * 70)
+    print(f"[User Query] {user_query}")
+    print("=" * 70)
+    
+    # Step 0: 쿼리 분해
+    if use_gpt_parsing:
+        print("\n[Step 0] GPT로 쿼리 분해 중...")
+        parsed = parse_query_with_gpt(user_query)
+        print(f"[Result] 분해 완료:")
+        print(f"  - Filters: {json.dumps(parsed['filters'], ensure_ascii=False)}")
+        print(f"  - Semantic Query: {parsed['semantic_query']}")
+        
+        filters = parsed['filters']
+        semantic_query = parsed['semantic_query']
+    else:
+        print("\n[Step 0] GPT 분해 스킵 - 전체를 의미 검색어로 사용")
+        filters = []
+        semantic_query = user_query
+    
+    # 의미 검색어가 없으면 원본 쿼리 사용
+    if not semantic_query or semantic_query.strip() == "":
+        semantic_query = user_query
+        print(f"[Warning] 의미 검색어가 비어있어 원본 쿼리 사용: {semantic_query}")
+    
+    # DB 연결
+    conn = connect_to_db()
+    if not conn:
+        return []
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_query}
-            ],
-            # 'tools'를 사용해 LLM이 JSON 스키마를 따르도록 강제
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "extract_query_components",
-                        "description": "사용자 쿼리에서 필터와 의미 검색어를 추출합니다.",
-                        "parameters": QUERY_JSON_SCHEMA
-                    }
-                }
-            ],
-            tool_choice={
-                "type": "function", 
-                "function": {"name": "extract_query_components"}
-            },
-            temperature=0.0 # 일관된 결과를 위해 0.0으로 설정
-        )
+        # Step 1: Metadata 필터링
+        respondent_ids = filter_respondents_by_metadata(conn, filters)
         
-        # LLM의 응답에서 JSON 문자열 추출
-        tool_call = response.choices[0].message.tool_calls[0]
-        if tool_call.function.name == "extract_query_components":
-            arguments_str = tool_call.function.arguments
-            # JSON 문자열을 Python 딕셔너리로 파싱
-            parsed_json = json.loads(arguments_str)
-            return parsed_json
-        else:
-            raise Exception("LLM이 예상된 함수를 호출하지 않았습니다.")
-
-    except Exception as e:
-        print(f"XXX [오류] OpenAI API 호출 또는 JSON 파싱 중 오류 발생: {e}")
-        # 오류 발생 시, 필터 없이 전체 쿼리를 의미 검색어로 사용 (Fallback)
-        return {
-            "filters": [],
-            "semantic_query": user_query 
-        }
-
-# --- 4. 메인 실행 (테스트용) ---
-if __name__ == "__main__":
+        # Step 2: 의미 검색어 임베딩
+        print(f"\n[Step 2-1] 의미 검색어 임베딩 중: '{semantic_query}'")
+        model = KUREEmbeddingModel()
+        query_vector = model.embed_query(semantic_query)
+        print(f"[Result] 쿼리 벡터 생성 완료 (dim: {len(query_vector)})")
+        
+        # Step 3: 유사 질문 검색
+        similar_question_ids = search_similar_questions(conn, query_vector, top_k)
+        
+        if not similar_question_ids:
+            print("[Warning] 유사한 질문을 찾지 못했습니다.")
+            return {'answer_data': [], 'total_respondents': 0, 'total_answers': 0, 'unique_respondents': []}
+        
+        # Step 4: 답변 통계 조회 (벡터 제외)
+        result = get_answer_statistics(conn, similar_question_ids, respondent_ids)
+        
+        print("\n" + "=" * 70)
+        print(f"[Complete] 총 {result['total_respondents']}명의 응답자, {result['total_answers']}개의 답변")
+        print("=" * 70)
+        
+        return result
     
-    # [테스트 1] 하이브리드 쿼리 (필터 + 의미)
-    query1 = "서울에 거주하는 30대 남성의 전문직인 직종"
-    result1 = parse_query_with_gpt(query1)
-    print("--- [결과 1] ---")
-    print(json.dumps(result1, indent=2, ensure_ascii=False))
-    # [예상 결과]
-    # {
-    #   "filters": [
-    #     {"column": "region", "operator": "LIKE", "value": "서울%"},
-    #     {"column": "age", "operator": ">=", "value": "30"},
-    #     {"column": "age", "operator": "<", "value": "40"},
-    #     {"column": "gender", "operator": "=", "value": "남성"}
-    #   ],
-    #   "semantic_query": "경제 만족도"
-    # }
+    finally:
+        conn.close()
+        print("\n[Info] DB 연결 종료")
 
+# --- 실행 예시 ---
+if __name__ == '__main__':
+    # 예시 1: 자연어 쿼리 (하이브리드 검색)
+    query1 = "서울 거주하는 30대 남성의 직업 중 전문직인 사람"
+    results1 = rag_search_pipeline(query1, top_k=3, use_gpt_parsing=True)
+    
+    print("\n" + "=" * 70)
+    print("예시 2: 필터 없는 자연어 쿼리")
+    print("=" * 70)
+    
+    # 예시 2: 필터 없는 자연어 쿼리
+    query2 = "서울 거주하는 30대 남성의 직업 중 전문직인 사람"
+    results2 = rag_search_pipeline(query2, top_k=3, use_gpt_parsing=True)
+    
+    print("\n" + "=" * 70)
+    print("--- [결과 1] ---")
+    print("=" * 70)
+    if results1 and results1.get('answer_data'):
+        # JSON 형태로 출력
+        output = {
+            "total_respondents": results1['total_respondents'],
+            "total_answers": results1['total_answers'],
+            "unique_respondents_count": len(results1['unique_respondents']),
+            "sample_answers": [
+                {
+                    "respondent_id": answer['respondent_id'],
+                    "question_id": answer['question_id'],
+                    "q_title": answer['q_title'],
+                    "answer_value": answer['answer_value'],
+                    "answer_text": answer['answer_text']
+                }
+                for answer in results1['answer_data'][:5]
+            ]
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+    else:
+        print("결과 없음")
+    
+    print("\n" + "=" * 70)
+    print("--- [결과 2] ---")
+    print("=" * 70)
+    if results2 and results2.get('answer_data'):
+        output = {
+            "total_respondents": results2['total_respondents'],
+            "total_answers": results2['total_answers'],
+            "unique_respondents_count": len(results2['unique_respondents'])
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+    else:
+        print("결과 없음")
+    
+    # 예시 2: 순수 의미 검색 (GPT 파싱 스킵)
+    # query2 = "경제 만족도"
+    # results2 = rag_search_pipeline(query2, top_k=5, use_gpt_parsing=False)
