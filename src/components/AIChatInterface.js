@@ -81,15 +81,23 @@ const AIChatInterface = ({ onExit }) => {
       const result = await response.json();
       return result.answer;
   */
-  const generateAIResponse = async (userMessage) => {
-    const message = userMessage.toLowerCase();
-
-    if (message.includes("평균")) return "📊 데이터의 평균값을 계산해보겠습니다.";
-    if (message.includes("최대")) return "🔎 최대값을 찾아보겠습니다.";
-    if (message.includes("트렌드")) return "📈 시간에 따른 트렌드를 분석해볼게요.";
-    if (message.includes("지역")) return "🗺️ 지역별 데이터를 그룹화 중입니다.";
-
-    return `"${userMessage}"에 대한 분석 결과를 준비 중입니다.`;
+  const generateAIResponse = async (userMessage) => {    
+    try {
+      const res = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: userMessage }),
+      });
+      
+      if (!res.ok) {
+        throw new Error(`서버 오류 발생: ${res.statusText}`);
+      }
+      const data = await res.json();
+      return data.answer;
+    } catch (error) {
+      console.error("AI 응답 생성 실패:", error);
+      return "죄송합니다, 답변을 생성하는 중 오류가 발생했습니다. 서버 상태를 확인해주세요.";
+    }
   };
 
 

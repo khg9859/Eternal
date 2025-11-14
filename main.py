@@ -1,5 +1,5 @@
-// 백엔드 연결용 FastAPI 코드
-// 디렉터리는 DATA 폴더 안에 넣어서 테스트 하면 됩니다.
+## 백엔드 연결용 FastAPI 코드
+## 디렉터리는 DATA 폴더 안에 넣어서 테스트 하면 됩니다.
 
 
 from fastapi import FastAPI, HTTPException
@@ -10,6 +10,8 @@ from psycopg2.extras import RealDictCursor
 import json
 from typing import List, Optional
 import numpy as np
+from viz_pipeline import viz_search
+from LLMlangchan import hybrid_answer
 
 app = FastAPI(title="Eternel API", description="자연어 질의 기반 패널 데이터 검색 API")
 
@@ -21,20 +23,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 데이터베이스 연결 설정
-DB_CONFIG = {
-    "host": "localhost",
-    "port": "5432",
-    "database": "capstone",
-    "user": "postgres",
-    "password": "Sjw@040107"
-}
-
 # Pydantic 모델들
 class SearchRequest(BaseModel):
     query: str
     limit: Optional[int] = 10
+
+class ChatRequest(BaseModel):
+    query: str
 
 class QuestionResponse(BaseModel):
     codebook_id: str
@@ -221,6 +216,31 @@ async def search_answers(request: SearchRequest):
         return {"query": request.query, "results": answers, "count": len(answers)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"답변 검색 실패: {str(e)}")
+
+@app.post("/chat")
+async def chat_with_rag(request: ChatRequest):
+    """LLM RAG 파이프라인을 통해 자연어 질문에 답변합니다."""
+    try:
+        # LLMlangchan.py의 hybrid_answer 함수 호출
+        result = hybrid_answer(request.query)
+        # 생성된 서술형 요약 답변만 반환
+        return {"answer": result.get("answer", "답변을 생성하지 못했습니다.")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI 채팅 처리 실패: {str(e)}")
+    
+@app.post("/viz")
+async def run_viz(request: ChatRequest):
+    """
+    자연어 기반 통계(시각화) 파이프라인 실행.
+    - 입력: { "query": "서울 30대 남성의 결혼 여부 분포" }
+    - 출력: viz_pipeline.viz_search() 결과 JSON 그대로 반환
+    """
+    try:
+        result = viz_search(request.query)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"통계 시각화 처리 실패: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn
