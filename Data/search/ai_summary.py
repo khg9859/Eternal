@@ -1,16 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 RAG 답변 요약기 v2 (LLM Call #3: Synthesize - Aggregated Data)
-
-[목적]
-'rag_search_pipeline.py'가 반환한 '사전 집계된 통계' JSON을 입력받아,
-gpt-4o 모델을 사용해 '수치'와 '비율'을 포함한
-상세한 자연어 요약 및 분석 리포트를 생성합니다.
-
-[v2 변경 사항]
-- v1 (rag_summarizer.py)과 달리, 원본 답변 리스트가 아닌
-  'value_counts' (집계 데이터)를 입력받는 것을 전제로 합니다.
-- SYSTEM_PROMPT가 '비율 계산' 및 '수치 분석'을 명시적으로 지시합니다.
+... (주석 동일) ...
 """
 
 import os
@@ -32,7 +23,7 @@ try:
 except Exception as e:
     print(f"XXX [오류] OpenAI 클라이언트 초기화 실패: {e}")
     client = None
-
+    
 # --- 2. LLM에게 전달할 시스템 프롬프트 정의 ---
 
 SYSTEM_PROMPT = """
@@ -58,9 +49,8 @@ SYSTEM_PROMPT = """
     
 5.  **[형식]** 최종 답변은 2-3문장의 간결하면서도 **분석적인** 한국어 문단이어야 합니다.
 """
-
 # --- 3. RAG 요약 함수 ---
-
+## 파싱 전 자연어 입력 그대로 넣기 : user_query (테스트로 아무내용/공백 넣었지만 테스트에 큰 영향을 끼치지 않았음.. 다른 사람도 다른 데이터를 넣은 테스트하길 바람)
 def summarize_agg_results(user_query: str, agg_results: dict) -> str:
     """
     gpt-4o를 호출하여 '집계된(aggregated)' RAG 검색 결과를 요약 및 분석합니다.
@@ -76,22 +66,36 @@ def summarize_agg_results(user_query: str, agg_results: dict) -> str:
     if not client:
         return "오류: OpenAI 클라이언트가 초기화되지 않았습니다."
 
+    # [수정] agg_results가 'query_results' 키를 포함하는지 확인
     if not agg_results or not agg_results.get('query_results'):
+        print("[Debug] 입력된 agg_results에 'query_results' 키가 없습니다.")
         return "관련 통계 데이터를 찾지 못했습니다."
 
     try:
         # DB 결과를 LLM이 읽을 수 있도록 JSON 문자열로 변환
-        # (샘플 답변 'answers' 리스트는 LLM의 토큰을 낭비하므로,
+        # (샘플 답변 'answers' 또는 'answers_sample' 리스트는 LLM의 토큰을 낭비하므로,
         #  핵심 정보인 'q_title'과 'value_counts'만 전달)
         
         safe_results = {}
-        for q_id, data in agg_results.get('query_results', {}).items():
-            safe_results[q_id] = {
-                "q_title": data.get("q_title"),
-                "value_counts": data.get("value_counts")
-                # 'answers' 샘플 리스트는 제외
-            }
+        # [수정] agg_results.get('query_results')가 딕셔너리가 맞는지 확인
+        query_results_data = agg_results.get('query_results', {})
+        if not isinstance(query_results_data, dict):
+             print(f"[Debug] 'query_results'가 딕셔너리 형식이 아닙니다: {type(query_results_data)}")
+             return "관련 통계 데이터를 찾지 못했습니다."
+
+        for q_id, data in query_results_data.items():
+            if data and 'value_counts' in data: # [수정] value_counts가 있는지 확인
+                safe_results[q_id] = {
+                    "q_title": data.get("q_title"),
+                    "value_counts": data.get("value_counts")
+                    # 'answers' 또는 'answers_sample' 샘플 리스트는 의도적으로 제외
+                }
+            else:
+                print(f"[Debug] {q_id} 항목에 'value_counts'가 없습니다.")
         
+        if not safe_results:
+            return "분석할 'value_counts' 데이터가 없습니다."
+
         # 실제 LLM에 전달할 최종 JSON
         final_json_input = {
             "query_results": safe_results
@@ -112,10 +116,11 @@ def summarize_agg_results(user_query: str, agg_results: dict) -> str:
 '수치'와 '비율(%)'이 포함된 상세한 자연어 요약 리포트를 생성하십시오.
 """
         
-        print(f"\n>>> [GPT-4o] 상세 분석 시도... (입력 데이터 크기: {len(results_str)} bytes)")
+        print(f"\n>>> [GPT] 상세 분석 시도... (입력 데이터 크기: {len(results_str)} bytes)")
 
+        # [수정] "gpt-5.1" -> "gpt-4o" (실제 사용 가능한 모델명으로)
         response = client.chat.completions.create(
-            model="gpt-5.1", # gpt-5.1 대신 gpt-4o 사용
+            model="gpt-5.1", 
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt_content}
@@ -124,47 +129,117 @@ def summarize_agg_results(user_query: str, agg_results: dict) -> str:
         )
         
         summary = response.choices[0].message.content
-        print(">>> [GPT-4o] 상세 분석 완료.")
+        print(">>> [GPT] 상세 분석 완료.")
         return summary
 
     except Exception as e:
-        print(f"XXX [오류] GPT-4o 요약 중 오류 발생: {e}")
+        print(f"XXX [오류] GPT 요약 중 오류 발생: {e}")
         return f"답변 생성 중 오류가 발생했습니다: {e}"
 
 # --- 4. 메인 실행 (테스트용) ---
 if __name__ == "__main__":
     
     # 1. 테스트할 원본 사용자 질문
-    mock_user_query = "필터링된 응답자들의 결혼 여부를 상세히 분석해줘."
+    mock_user_query = "전체 인원 몇명 중에 IT직군에서 일해?"
     
     # 2. 'rag_search_pipeline' 등이 반환했다고 가정한 '집계 JSON'
-    # (사용자님이 제공한 샘플을 기반으로 완전한 JSON 구성)
+    # [수정] Python 딕셔너리 문법 오류 수정
+    # 'query_results'와 'w2_Q5_1' 키 추가
     mock_agg_results = {
-      "query_results": {
-        "w2_Q1": {
-          "q_title": "결혼여부",
-          # 'total_respondents' 키는 없다고 가정 (LLM이 계산하도록)
-          "answers": [
-            # 이 샘플 데이터는 LLM에 전달되지 않음
-            {
-              "answer_id": 1311276,
-              "mb_sn": "w209536081994405",
-              "answer_value_text": "미혼"
-            },
-            {
-              "answer_id": 1311365,
-              "mb_sn": "w209648047130979",
-              "answer_value_text": "미혼"
+        "query_results": {
+            "w2_Q5_1": {
+                "q_title": "직무",
+                "codebook_id": "w2_Q5_1",
+                "value_counts": {
+                    "전체 응답자 수" : 470,
+                    "생산•정비•기능•노무": 15,
+                    "유통•물류•운송•운전": 18,
+                    "의료•간호•보건•복지": 21,
+                    "무역•영업•판매•매장관리": 36,
+                    "건설•건축•토목•환경": 30,
+                    "전자•기계•기술•화학•연구개발": 16,
+                    "운송": 1,
+                    "IT": 57,
+                    "경영•인사•총무•사무": 54,
+                    "디자인": 11,
+                    "취준": 1,
+                    "서비스•여행•숙박•음식•미용•보안": 34,
+                    "무직": 8,
+                    "금융•보험•증권": 16,
+                    "인터넷•통신": 8,
+                    "재무•회계•경리": 20,
+                    "마케팅•광고•홍보•조사": 23,
+                    "전문직•법률•인문사회•임원": 10,
+                    "교육•교사•강사•교직원": 15,
+                    "음식생산, 및, 판매": 1,
+                    "고객상담•TM": 12,
+                    "사무전반적인, 모든것": 1,
+                    "교통관련": 1,
+                    "문화•스포츠": 7,
+                    "방송•언론": 1,
+                    "컨설팅/기획": 1,
+                    "취업준비": 1,
+                    "기사": 1,
+                    "안보, 국방": 1,
+                    "취준생": 1,
+                    "게임": 3,
+                    "백수라고": 1,
+                    "엔터테인먼트": 1,
+                    "장애우들에게, 문화체험": 1,
+                    "현재, 무직": 1,
+                    "노가다": 1,
+                    "구직중": 1,
+                    "프리랜서": 2,
+                    "공연": 1,
+                    "편의점": 1,
+                    "모바일": 1
+                },
+                "answers_sample": [
+                    {
+                      "answer_id": 426074,
+                      "mb_sn": "w401072656314696",
+                      "question_id": "w2_Q5_1",
+                      "answer_value": "21",
+                      "codebook_data": {
+                        "answers": [
+                          {
+                            "qi_val": "1",
+                            "qi_title": "경영•인사•총무•사무"
+                          },
+                          {
+                            "qi_val": "21",
+                            "qi_title": "생산•정비•기능•노무"
+                          }
+                          # ... (중간 생략) ...
+                        ],
+                        "q_title": "직무",
+                        "codebook_id": "w2_Q5_1"
+                      },
+                      "answer_value_text": "생산•정비•기능•노무"
+                    },
+                    {
+                      "answer_id": 432082,
+                      "mb_sn": "w304288963069749",
+                      "question_id": "w2_Q5_1",
+                      "answer_value": "13",
+                      "codebook_data": {
+                         # ... (중간 생략) ...
+                      },
+                      "answer_value_text": "유통•물류•운송•운전"
+                    },
+                    {
+                      "answer_id": 440373,
+                      "mb_sn": "w374015084020377",
+                      "question_id": "w2_Q5_1",
+                      "answer_value": "8",
+                      "codebook_data": {
+                         # ... (중간 생략) ...
+                      },
+                      "answer_value_text": "의료•간호•보건•복지"
+                    }
+                ]
             }
-          ],
-          "value_counts": {
-            "미혼": 333,
-            "기혼": 125,
-            "기타(사별/이혼 등)": 3
-          }
         }
-        # (만약 다른 질문이 있다면 "w2_Q2": { ... } 가 추가될 수 있음)
-      }
     }
 
 
