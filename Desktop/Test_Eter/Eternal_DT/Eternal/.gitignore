@@ -1,0 +1,14 @@
+# Ignore Python cache directories
+__pycache__/
+*.py[cod]
+Data/test/
+Data/db_insert/panelData/*.xlsx
+!Data/db_insert/panelData/qpoll_join_ex.xlsx
+Data/db_insert/panelData/*.csv
+!Data/db_insert/panelData/wel_1st.ex.csv
+!Data/db_insert/panelData/wel_2ndex.csv
+Data/db_insert/panelData/exceptFile
+.env
+package-lock.json
+package.json
+node_modules
