@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-RAG 답변 요약기 (LLM Call #3: Synthesize)
+RAG 답변 요약기 v2 (LLM Call #3: Synthesize - Aggregated Data)
 
 [목적]
-'rag_search_pipeline.py'가 반환한 RAG 검색 결과(JSON/dict)와
-원본 사용자 질문을 gpt-4o 모델에 전달하여,
-최종 사용자에게 보여줄 자연어 요약 답변을 생성합니다.
+'rag_search_pipeline.py'가 반환한 '사전 집계된 통계' JSON을 입력받아,
+gpt-4o 모델을 사용해 '수치'와 '비율'을 포함한
+상세한 자연어 요약 및 분석 리포트를 생성합니다.
+
+[v2 변경 사항]
+- v1 (rag_summarizer.py)과 달리, 원본 답변 리스트가 아닌
+  'value_counts' (집계 데이터)를 입력받는 것을 전제로 합니다.
+- SYSTEM_PROMPT가 '비율 계산' 및 '수치 분석'을 명시적으로 지시합니다.
 """
 
 import os
@@ -19,10 +24,10 @@ API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not API_KEY:
     print("XXX [오류] .env 파일에 'OPENAI_API_KEY'가 설정되지 않았습니다.")
-    # 이 모듈이 다른 곳에서 import될 수 있으므로, exit() 대신 예외를 발생시킵니다.
     raise EnvironmentError("OPENAI_API_KEY가 .env 파일에 설정되지 않았습니다.")
 
 try:
+    # (참고: gpt-5.1은 현재 사용 불가능하므로, gpt-4o를 사용합니다)
     client = OpenAI(api_key=API_KEY)
 except Exception as e:
     print(f"XXX [오류] OpenAI 클라이언트 초기화 실패: {e}")
@@ -31,42 +36,38 @@ except Exception as e:
 # --- 2. LLM에게 전달할 시스템 프롬프트 정의 ---
 
 SYSTEM_PROMPT = """
-당신은 '설문조사 데이터 분석 AI 어시스턴트'입니다.
-'원본 사용자 질문'과 'DB에서 검색된 관련 데이터(JSON)'가 제공됩니다.
-당신의 임무는 이 두 가지 정보를 종합하여, 사용자의 질문에 대한
-전문적이고 데이터에 기반한 '자연어 요약 답변'을 생성하는 것입니다.
+당신은 '설문조사 데이터 분석 애널리스트'입니다.
+'원본 사용자 질문'과 '사전 집계된 통계 데이터(JSON)'가 제공됩니다.
+당신의 임무는 이 데이터를 기반으로, 사용자의 질문에 대한 **핵심 분석이 포함된 간결한 요약**을 생성하는 것입니다.
 
 [지침]
-1.  **[매우 중요]** 'DB 검색 결과'는 '원본 사용자 질문'에 포함된 '필터 조건'(예: 30대, 남성, 서울)이 **'이미 적용된'** 결과입니다. 
-    당신의 임무는 이 필터링된 데이터 내에서, 질문의 '주요 의도'(예: '전문직', '스트레스 해소법')에 해당하는 내용을 요약하는 것입니다.
-    (예: "30대 남성"을 데이터 샘플에서 다시 찾으려 하지 마십시오.)
+1.  **[매우 중요]** 'DB 검색 결과'는 사용자의 '필터 조건'(예: 30대, 남성, 서울)이 **'이미 적용된'** 결과입니다. 
+    당신은 이 필터링된 그룹 내의 통계를 분석하는 데만 집중하십시오.
 
-2.  **데이터 기반:** '제공된 데이터'의 명시된 내용만을 근거로 답변해야 합니다.
-3.  **원본 질문 초점:** '원본 사용자 질문'의 의도에 정확히 맞는 답변을 하십시오.
-4.  **[수정] 통계 및 비율 활용:**
-    - `total_respondents_in_filter` (필터링된 총 응답자 수) 또는 `total_unique_answers_found` (v2의 고유 답변 수)를 기준으로 사용하십시오.
-    - `grouped_answers_by_similarity` (v2)의 `respondent_count` (답변별 응답자 수)를 활용하십시오.
-    - (예: "필터링된 461명(v1) 중 '전문직'은 1명입니다." 또는 "검색된 답변(v2) 중 '전문직'은 1명(X%)이었습니다.")
-    - **수치와 비율(%)을 계산하여** 답변을 최대한 구체적이고 풍부하게 만드십시오.
-    - 각 항목의 비율은 전체 응답 수 대비 백분율(%)로 계산하여 기재하십시오
+2.  **[데이터 구조]** `value_counts`(답변별 응답자 수)가 핵심 정보입니다.
 
-5.  **합성(Synthesize):** 단순히 데이터를 나열하지 말고, "A 질문에 대해 B라고 답한 응답자는 C 질문에 대해 D라고 답하는 경향을 보입니다."처럼 데이터를 종합하고 통찰을 제공하십시오.
-6.  **자신감 있는 답변:** 검색된 데이터가 질문에 답하기에 충분하다면, 자신감 있게 요약하십시오.
-    (예: "30대 남성 중 전문직에 종사하는 응답자가 1명 발견되었습니다.")
-    데이터가 부족할 경우에만 "DB에서 ... 다음과 같은 정보를 찾았습니다..."라고 한정하여 답변하십시오.
-7.  **형식:** 최종 답변은 한국어 자연어 문장으로만 구성되어야 합니다. 문장은 분석 보고서 형식을 유지하십시오. (객관적·간결)
+3.  **[핵심 임무: 분석 및 요약]**
+    - `value_counts`의 모든 값을 합산하여 '총 응답자 수'를 계산하십시오. (예: 333 + 125 + 3 = 461명)
+    - '총 응답자 수'를 기준으로 각 항목의 '비율(%)'을 계산하십시오.
+    - **가장 비율이 높은 항목(1순위)**을 명확히 밝히고, **주요 항목들(2, 3순위 등)의 수치와 비율을 비교 분석**하십시오.
+    - **(예시) "총 461명 중 '미혼'이 333명(72.2%)으로 과반수를 차지했으며, '기혼'은 125명(27.1%)으로 그 뒤를 이었습니다."**처럼, 핵심 통계와 비교 분석을 포함하여 2-3문장으로 요약하십시오.
+
+4.  **[리포트 생성]**
+    - 서론("분석 결과는...")이나 결론("이러한 결과는...") 같은 군더더기를 피하고, **핵심 분석 내용**으로 바로 시작하십시오.
+    - **사실, 수치, 비율, 그리고 주요 항목 간의 비교**에 집중하십시오.
+    
+5.  **[형식]** 최종 답변은 2-3문장의 간결하면서도 **분석적인** 한국어 문단이어야 합니다.
 """
 
 # --- 3. RAG 요약 함수 ---
 
-def summarize_rag_results(user_query: str, rag_results: dict) -> str:
+def summarize_agg_results(user_query: str, agg_results: dict) -> str:
     """
-    gpt-4o를 호출하여 RAG 검색 결과를 요약합니다.
+    gpt-4o를 호출하여 '집계된(aggregated)' RAG 검색 결과를 요약 및 분석합니다.
     
     Args:
         user_query: 사용자의 원본 자연어 질문
-        rag_results: 'rag_search_pipeline.py'가 반환한 딕셔너리
-                     (v1의 형식이든, v2의 형식이든 모두 처리 가능)
+        agg_results: 'query_results' 키를 포함하는 집계 딕셔너리
     
     Returns:
         LLM이 생성한 자연어 요약 답변 (str)
@@ -75,67 +76,55 @@ def summarize_rag_results(user_query: str, rag_results: dict) -> str:
     if not client:
         return "오류: OpenAI 클라이언트가 초기화되지 않았습니다."
 
-    # [수정] v1 결과(total_respondents)와 v2 결과(answer_data)를 모두 고려
-    if not rag_results or (
-        not rag_results.get('answer_data') and 
-        not rag_results.get('total_respondents')
-    ):
-        return "데이터베이스에서 관련 정보를 찾지 못했습니다."
+    if not agg_results or not agg_results.get('query_results'):
+        return "관련 통계 데이터를 찾지 못했습니다."
 
     try:
         # DB 결과를 LLM이 읽을 수 있도록 JSON 문자열로 변환
-        safe_results = {}
+        # (샘플 답변 'answers' 리스트는 LLM의 토큰을 낭비하므로,
+        #  핵심 정보인 'q_title'과 'value_counts'만 전달)
         
-        # v1 JSON (사용자가 제공한 샘플)을 가정
-        if 'total_respondents' in rag_results:
-             # 벡터(a_vector)는 LLM에 불필요하므로 제외하고 전달
-            safe_results = {
-                "total_respondents_in_filter": rag_results.get('total_respondents'),
-                "total_answers_found": rag_results.get('total_answers'),
-                "sample_answers": [
-                    {k: v for k, v in answer.items() if k != 'a_vector'} 
-                    for answer in rag_results.get('answer_data', [])[:20] # 너무 길어지지 않게 20개만
-                ]
+        safe_results = {}
+        for q_id, data in agg_results.get('query_results', {}).items():
+            safe_results[q_id] = {
+                "q_title": data.get("q_title"),
+                "value_counts": data.get("value_counts")
+                # 'answers' 샘플 리스트는 제외
             }
-        # v2 (GROUP BY) JSON을 가정
-        elif rag_results.get('answer_data'):
-             safe_results = {
-                "total_unique_answers_found": len(rag_results.get('answer_data', [])),
-                "grouped_answers_by_similarity": [
-                    {k: v for k, v in answer.items() if k != 'a_vector'} 
-                    for answer in rag_results['answer_data'] # v2는 이미 Top-K로 정제됨
-                ]
-             }
-        else:
-             safe_results = rag_results
-
-        results_str = json.dumps(safe_results, ensure_ascii=False, indent=2)
+        
+        # 실제 LLM에 전달할 최종 JSON
+        final_json_input = {
+            "query_results": safe_results
+        }
+        
+        results_str = json.dumps(final_json_input, ensure_ascii=False, indent=2)
         
         # LLM에게 전달할 사용자 프롬프트 구성
         user_prompt_content = f"""
 [원본 사용자 질문]
 "{user_query}"
 
-[DB 검색 결과 (JSON)]
+[집계된 통계 데이터 (JSON)]
 {results_str}
 
 [지침]
-위 시스템 프롬프트의 지침에 따라, 'DB 검색 결과'를 바탕으로 '원본 사용자 질문'에 대한 자연어 요약 답변을 생성하십시오.
+위 시스템 프롬프트의 지침에 따라, 'DB 검색 결과'의 'value_counts'를 분석하여
+'수치'와 '비율(%)'이 포함된 상세한 자연어 요약 리포트를 생성하십시오.
 """
         
-        print(f"\n>>> [GPT-4o] 요약 생성 시도... (입력 데이터 크기: {len(results_str)} bytes)")
+        print(f"\n>>> [GPT-4o] 상세 분석 시도... (입력 데이터 크기: {len(results_str)} bytes)")
 
         response = client.chat.completions.create(
-            model="gpt-4o", # 또는 "gpt-4o-mini" (더 빠르고 저렴함)
+            model="gpt-5.1", # gpt-5.1 대신 gpt-4o 사용
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt_content}
             ],
-            temperature=0.5 # 사실 기반의 답변을 위해 0.0~0.7 사이 권장
+            temperature=0.3 # 분석 리포트의 일관성을 위해 temperature 낮춤
         )
         
         summary = response.choices[0].message.content
-        print(">>> [GPT-4o] 요약 생성 완료.")
+        print(">>> [GPT-4o] 상세 분석 완료.")
         return summary
 
     except Exception as e:
@@ -146,60 +135,43 @@ def summarize_rag_results(user_query: str, rag_results: dict) -> str:
 if __name__ == "__main__":
     
     # 1. 테스트할 원본 사용자 질문
-    mock_user_query = "서울 거주하는 30대 남성의 직업 중 전문직인 사람"
+    mock_user_query = "필터링된 응답자들의 결혼 여부를 상세히 분석해줘."
     
-    # 2. 'rag_search_pipeline.py' (v1)이 반환했다고 가정한 JSON (사용자님이 제공한 샘플)
-    mock_rag_results = {
-      "total_respondents": 461,
-      "total_answers": 1358,
-      "unique_respondents_count": 461,
-      "answer_data": [ # (v1 코드에서는 'answer_data' 키를 사용했습니다)
-        {
-          "respondent_id": "w102849562302896",
-          "question_id": "w2_Q4",
-          "q_title": "최종학력",
-          "answer_value": "3",
-          "answer_text": "대학교 졸업"
-        },
-        {
-          "respondent_id": "w102849562302896",
-          "question_id": "w2_Q5",
-          "q_title": "직업",
-          "answer_value": "3",
-          "answer_text": "경영/관리직 (사장, 대기업 간부, 고위 공무원 등)"
-        },
-        {
-          "respondent_id": "w10337438326167",
-          "question_id": "w2_Q5",
-          "q_title": "직업",
-          "answer_value": "4",
-          "answer_text": "사무직 (기업체 차장 이하 사무직 종사자, 공무원 등)"
-        },
-        {
-          "respondent_id": "w10337438326167",
-          "question_id": "w2_Q5",
-          "q_title": "직업",
-          "answer_value": "5",
-          "answer_text": "전문직 (의사, 변호사, 교수, 엔지니어, 디자이너 등)"
+    # 2. 'rag_search_pipeline' 등이 반환했다고 가정한 '집계 JSON'
+    # (사용자님이 제공한 샘플을 기반으로 완전한 JSON 구성)
+    mock_agg_results = {
+      "query_results": {
+        "w2_Q1": {
+          "q_title": "결혼여부",
+          # 'total_respondents' 키는 없다고 가정 (LLM이 계산하도록)
+          "answers": [
+            # 이 샘플 데이터는 LLM에 전달되지 않음
+            {
+              "answer_id": 1311276,
+              "mb_sn": "w209536081994405",
+              "answer_value_text": "미혼"
+            },
+            {
+              "answer_id": 1311365,
+              "mb_sn": "w209648047130979",
+              "answer_value_text": "미혼"
+            }
+          ],
+          "value_counts": {
+            "미혼": 333,
+            "기혼": 125,
+            "기타(사별/이혼 등)": 3
+          }
         }
-        # (...
-      ]
+        # (만약 다른 질문이 있다면 "w2_Q2": { ... } 가 추가될 수 있음)
+      }
     }
 
-    print("--- RAG 요약 모듈 테스트 ---")
+
+    print("--- RAG 상세 분석 모듈 테스트 ---")
     
     # 3. 요약 함수 실행
-    final_summary = summarize_rag_results(mock_user_query, mock_rag_results)
+    final_summary = summarize_agg_results(mock_user_query, mock_agg_results)
     
-    print("\n--- 최종 요약 답변 ---")
+    print("\n--- 최종 분석 리포트 ---")
     print(final_summary)
-
-    # --- 테스트 2 (데이터가 없는 경우) ---
-    print("\n--- RAG 요약 모듈 테스트 2 (결과 없음) ---")
-    mock_rag_results_empty = {
-        "total_respondents": 0,
-        "total_answers": 0,
-        "answer_data": []
-    }
-    final_summary_empty = summarize_rag_results(mock_user_query, mock_rag_results_empty)
-    print(final_summary_empty)
