@@ -48,44 +48,36 @@ export default function AISummary({ query }) {
   const [error, setError] = useState(null);
 
 
-  /*
-    🧠 [백엔드 RAG 연동 시 사용할 코드]
+  // 백엔드에서 요약 가져오기
+  useEffect(() => {
+    const fetchSummary = async () => {
+      setIsLoading(true);
+      setError(null);
 
-    useEffect(() => {
-      const fetchSummary = async () => {
-        setIsLoading(true);
-        setError(null);
+      try {
+        const res = await fetch("http://localhost:8000/rag/summary", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query }),
+        });
 
-        try {
-          const res = await fetch("http://localhost:8000/rag/summary", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query }),
-          });
+        if (!res.ok) throw new Error("서버 오류 발생");
 
-          if (!res.ok) throw new Error("서버 오류 발생");
+        const data = await res.json();
 
-          const data = await res.json();
+        // data.summary는 문자열 배열 형태여야 함
+        setSummary(data.summary || staticSummary);
+      } catch (err) {
+        console.error("요약 실패:", err);
+        setError("AI 요약 데이터를 불러오는 중 오류가 발생했습니다.");
+        setSummary(staticSummary); // fallback
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
-          // data.summary는 문자열 배열 형태여야 함
-          setSummary(data.summary || staticSummary);
-        } catch (err) {
-          console.error("요약 실패:", err);
-          setError("AI 요약 데이터를 불러오는 중 오류가 발생했습니다.");
-          setSummary(staticSummary); // fallback
-        } finally {
-          setIsLoading(false);
-        }
-      };
-
-      fetchSummary();
-    }, [query]);
-
-    요약:
-    - query가 바뀔 때마다 AI에게 새 요약 요청
-    - 성공하면 summary 업데이트
-    - 실패하면 staticSummary로 fallback
-  */
+    fetchSummary();
+  }, [query, staticSummary]);
 
   return (
     <div

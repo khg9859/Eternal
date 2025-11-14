@@ -106,40 +106,59 @@ const AIChatInterface = ({ onExit }) => {
         → 백엔드 API로 변경
     - 응답은 RAG 파이프라인 결과(answer)로 바로 표시됨.
   */
-  const handleSendMessage = async () => {
-    // 입력 없거나 AI 응답 대기중이면 무시
-    if (!inputMessage.trim() || isLoading) return;
+const handleSendMessage = async () => {
+  if (!inputMessage.trim() || isLoading) return;
 
-    // 사용자 메시지 객체 생성
-    const userMessage = {
-      id: Date.now(),
-      type: "user",
-      content: inputMessage.trim(),
-      timestamp: new Date(),
-    };
-
-    // 화면에 사용자 메시지 추가
-    setMessages((prev) => [...prev, userMessage]);
-    setInputMessage("");
-    setIsLoading(true);
-
-    // 임시 AI 응답 (향후 백엔드로 변경)
-    const aiResponse = await generateAIResponse(userMessage.content);
-
-    // “AI가 생각하는 시간” 같은 자연스러운 딜레이
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          type: "ai",
-          content: aiResponse,
-          timestamp: new Date(),
-        },
-      ]);
-      setIsLoading(false);
-    }, 800);
+  const userMessage = {
+    id: Date.now(),
+    type: "user",
+    content: inputMessage.trim(),
+    timestamp: new Date(),
   };
+
+  setMessages((prev) => [...prev, userMessage]);
+  const query = inputMessage.trim();
+  setInputMessage("");
+  setIsLoading(true);
+
+  try {
+    // ✅ Eternal_SV 백엔드 호출
+    const response = await fetch('http://localhost:8000/rag/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        session_id: 'eternal_fe_session'
+      })
+    });
+
+    if (!response.ok) throw new Error(`RAG 검색 실패: ${response.status}`);
+    const data = await response.json();
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now() + 1,
+        type: "ai",
+        content: data.answer || '답변을 생성할 수 없습니다.',
+        timestamp: new Date(),
+      },
+    ]);
+    
+  } catch (error) {
+    console.error('AI 응답 생성 오류:', error);
+    // Fallback
+    const aiResponse = await generateAIResponse(query);
+    setMessages((prev) => [...prev, {
+      id: Date.now() + 1,
+      type: "ai",
+      content: aiResponse,
+      timestamp: new Date(),
+    }]);
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   // Enter키 전송 기능
   const handleKeyPress = (e) => {
@@ -165,12 +184,13 @@ const AIChatInterface = ({ onExit }) => {
 
   return (
     <div
-      className="fixed bottom-8 right-8 w-[500px] h-[820px] flex flex-col rounded-2xl overflow-hidden shadow-[0_0_30px_rgba(255,215,0,0.25)] border border-yellow-500/30"
+      className="fixed bottom-8 right-8 w-[500px] h-[820px] flex flex-col rounded-2xl overflow-hidden shadow-[0_0_30px_rgba(255,215,0,0.25)] border border-yellow-500/30 z-[9999]"
 
       /*
         챗봇 전체 UI 투명도 적용 영역
         - 전체 UI 포함(텍스트·버튼 등 모두)
         - opacity는 프로젝트 UI 개성 요소이고 데이터 처리와는 독립적
+        - z-[9999]로 최상위 레이어 설정
       */
       style={{
         opacity: opacity,

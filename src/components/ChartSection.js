@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import Chart from "chart.js/auto";
+import DataTable from "./DataTable";
 
 /*
   ChartSection.js
@@ -41,6 +42,8 @@ import Chart from "chart.js/auto";
 export default function ChartSection({ query }) {
 
   useEffect(() => {
+    let ageChart, categoryChart, sentimentTrustChart;
+    
     // -------------------------------------------------------
     // ① 라이트/다크 모드 감지 → 팔레트 지정
     // -------------------------------------------------------
@@ -75,7 +78,7 @@ export default function ChartSection({ query }) {
     // -------------------------------------------------------
     // ② Chart.js 기본 전역 설정
     // -------------------------------------------------------
-    Chart.defaults.color = palette.text;
+    Chart.defaults.color = isDark ? "#E5E7EB" : "#1F2937"; // 라이트/다크 모드에 따라 자동 변경
     Chart.defaults.font = {
       family: "'Inter', 'Pretendard', sans-serif",
       size: 14,
@@ -84,30 +87,50 @@ export default function ChartSection({ query }) {
     };
 
     // -------------------------------------------------------
-    // ③ 더미 분석 데이터 (RAG 연동 시 fetch로 교체)
+    // ③ 백엔드에서 차트 데이터 가져오기
     // -------------------------------------------------------
-    /*
-      RAG 백엔드 연동 시 사용될 코드 예시:
+    const fetchChartData = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/rag/charts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query }),
+        });
+        
+        if (!res.ok) throw new Error('차트 데이터 로드 실패');
+        
+        const data = await res.json();
+        return data;
+      } catch (error) {
+        console.error('차트 데이터 로드 오류:', error);
+        // Fallback 더미 데이터
+        return {
+          demographics: { "20대": 24, "30대": 41, "40대": 28, "50대": 7 },
+          category_ratio: { "식품": 30, "패션": 25, "IT": 20, "여가": 15, "기타": 10 },
+          monthly_trend: { "1월": 82, "2월": 90, "3월": 96, "4월": 103, "5월": 115, "6월": 122 },
+          sentiment_score: { 긍정: 68, 중립: 22, 부정: 10 },
+          trust_index: [84, 86, 87, 89, 90, 92]
+        };
+      }
+    };
 
-      const res = await fetch("http://localhost:8000/rag/charts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
-      });
-      const { demographics, category_ratio, monthly_trend, sentiment_score, trust_index } = await res.json();
-    */
+    // 비동기 데이터 로드 및 차트 렌더링
+    fetchChartData().then(({ demographics, category_ratio, monthly_trend, sentiment_score, trust_index }) => {
+      
+      // 기존 차트 인스턴스 제거 (중요!)
+      const existingAgeChart = Chart.getChart("ageChart");
+      if (existingAgeChart) existingAgeChart.destroy();
+      
+      const existingCategoryChart = Chart.getChart("categoryChart");
+      if (existingCategoryChart) existingCategoryChart.destroy();
+      
+      const existingSentimentChart = Chart.getChart("sentimentTrustChart");
+      if (existingSentimentChart) existingSentimentChart.destroy();
 
-    const demographics = { "20대": 24, "30대": 41, "40대": 28, "50대": 7 };
-    const category_ratio = { "식품": 30, "패션": 25, "IT": 20, "여가": 15, "기타": 10 };
-    const monthly_trend = { "1월": 82, "2월": 90, "3월": 96, "4월": 103, "5월": 115, "6월": 122 };
-    const sentiment_score = { 긍정: 68, 중립: 22, 부정: 10 };
-    const trust_index = [84, 86, 87, 89, 90, 92];
-
-
-    // -------------------------------------------------------
-    // ④ 인구통계 차트 (Bar)
-    // -------------------------------------------------------
-    const ageChart = new Chart(document.getElementById("ageChart"), {
+      // -------------------------------------------------------
+      // ④ 인구통계 차트 (Bar)
+      // -------------------------------------------------------
+      ageChart = new Chart(document.getElementById("ageChart"), {
       type: "bar",
       data: {
         labels: Object.keys(demographics),
@@ -130,20 +153,21 @@ export default function ChartSection({ query }) {
           y: {
             beginAtZero: true,
             grid: { color: palette.grid },
-            ticks: { color: isDark ? "#FFFFFF" : palette.text, font: { weight: "bold" } },
+            ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } },
           },
           x: {
-            ticks: { color: isDark ? "#FFFFFF" : palette.text, font: { weight: "bold" } },
+            grid: { color: palette.grid },
+            ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } },
           },
         },
       },
     });
 
 
-    // -------------------------------------------------------
-    // ⑤ 카테고리 비중 (Doughnut)
-    // -------------------------------------------------------
-    const categoryChart = new Chart(document.getElementById("categoryChart"), {
+      // -------------------------------------------------------
+      // ⑤ 카테고리 비중 (Doughnut)
+      // -------------------------------------------------------
+      categoryChart = new Chart(document.getElementById("categoryChart"), {
       type: "doughnut",
       data: {
         labels: Object.keys(category_ratio),
@@ -162,7 +186,10 @@ export default function ChartSection({ query }) {
         plugins: {
           legend: {
             position: "bottom",
-            labels: { color: isDark ? "#FFFFFF" : palette.text, font: { size: 14, weight: "600" } },
+            labels: { 
+              color: isDark ? "#E5E7EB" : "#1F2937", 
+              font: { size: 14, weight: "600" } 
+            },
           },
         },
         maintainAspectRatio: false,
@@ -170,40 +197,10 @@ export default function ChartSection({ query }) {
     });
 
 
-    // -------------------------------------------------------
-    // ⑥ 월별 트렌드 (Line)
-    // -------------------------------------------------------
-    const trendChart = new Chart(document.getElementById("trendChart"), {
-      type: "line",
-      data: {
-        labels: Object.keys(monthly_trend),
-        datasets: [
-          {
-            label: "월별 지표 변화",
-            data: Object.values(monthly_trend),
-            borderColor: palette.primary,
-            backgroundColor: isDark ? "rgba(129,140,248,0.35)" : "rgba(99,102,241,0.25)",
-            fill: true,
-            tension: 0.4,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { beginAtZero: true, grid: { color: palette.grid }, ticks: { color: isDark ? "#FFFFFF" : palette.text } },
-          x: { ticks: { color: isDark ? "#FFFFFF" : palette.text } },
-        },
-      },
-    });
-
-
-    // -------------------------------------------------------
-    // ⑦ 감정·신뢰(Layered Bar + Line)
-    // -------------------------------------------------------
-    const sentimentTrustChart = new Chart(document.getElementById("sentimentTrustChart"), {
+      // -------------------------------------------------------
+      // ⑥ 감정·신뢰(Layered Bar + Line)
+      // -------------------------------------------------------
+      sentimentTrustChart = new Chart(document.getElementById("sentimentTrustChart"), {
       type: "bar",
       data: {
         labels: Object.keys(sentiment_score),
@@ -233,25 +230,26 @@ export default function ChartSection({ query }) {
         plugins: {
           legend: {
             position: "bottom",
-            labels: { color: isDark ? "#FFFFFF" : palette.text, font: { size: 14, weight: "600" } },
+            labels: { color: palette.text, font: { size: 14, weight: "600" } },
           },
         },
         scales: {
-          y: { beginAtZero: true, max: 100, grid: { color: palette.grid }, ticks: { color: isDark ? "#FFFFFF" : palette.text } },
-          x: { ticks: { color: isDark ? "#FFFFFF" : palette.text } },
+          y: { beginAtZero: true, max: 100, grid: { color: palette.grid }, ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } } },
+          x: { grid: { color: palette.grid }, ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } } },
         },
       },
     });
 
 
+    });
+
     // -------------------------------------------------------
     // ⑧ cleanup (메모리 누수 방지)
     // -------------------------------------------------------
     return () => {
-      ageChart.destroy();
-      categoryChart.destroy();
-      trendChart.destroy();
-      sentimentTrustChart.destroy();
+      if (ageChart) ageChart.destroy();
+      if (categoryChart) categoryChart.destroy();
+      if (sentimentTrustChart) sentimentTrustChart.destroy();
     };
   }, [query]); // query 변경 시 차트 다시 렌더링
 
@@ -260,31 +258,32 @@ export default function ChartSection({ query }) {
   // JSX 렌더링
   // -------------------------------------------------------
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
+    <>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
 
-      {/* ① 인구통계 막대그래프 */}
-      <div className="lg:col-span-2 bg-white/80 dark:bg-[#1E2028]/90 rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-md">
-        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">인구통계 분포</h3>
-        <div className="h-[380px]"><canvas id="ageChart"></canvas></div>
-      </div>
+        {/* ① 인구통계 막대그래프 */}
+        <div className="lg:col-span-2 bg-white/95 dark:bg-[#1E2028] rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-md">
+          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">인구통계 분포</h3>
+          <div className="h-[380px]"><canvas id="ageChart"></canvas></div>
+        </div>
 
-      {/* ② 카테고리 도넛 */}
-      <div className="bg-white/80 dark:bg-[#1E2028]/90 rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-md">
-        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">주요 카테고리 비중</h3>
-        <div className="h-[380px]"><canvas id="categoryChart"></canvas></div>
-      </div>
+        {/* ② 카테고리 도넛 */}
+        <div className="bg-white/95 dark:bg-[#1E2028] rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-md">
+          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">주요 카테고리 비중</h3>
+          <div className="h-[380px]"><canvas id="categoryChart"></canvas></div>
+        </div>
 
-      {/* ③ 월별 트렌드 */}
-      <div className="lg:col-span-2 bg-white/80 dark:bg-[#1E2028]/90 rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-md">
-        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">월별 트렌드 변화</h3>
-        <div className="h-[380px]"><canvas id="trendChart"></canvas></div>
-      </div>
+        {/* ③ 데이터 테이블 */}
+        <div className="lg:col-span-2">
+          <DataTable query={query} />
+        </div>
 
-      {/* ④ 감정/신뢰 */}
-      <div className="bg-white/80 dark:bg-[#1E2028]/90 rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-md">
-        <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">감정·신뢰 지표</h3>
-        <div className="h-[380px]"><canvas id="sentimentTrustChart"></canvas></div>
+        {/* ④ 감정/신뢰 */}
+        <div className="bg-white/95 dark:bg-[#1E2028] rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-md">
+          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">감정·신뢰 지표</h3>
+          <div className="h-[380px]"><canvas id="sentimentTrustChart"></canvas></div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

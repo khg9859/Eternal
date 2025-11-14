@@ -138,7 +138,7 @@ export default function QuickStats({ query }) {
                 {/* 제목 · 변화율 */}
                 <div>
                   <div className="flex justify-between items-center mb-2">
-                    <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400">
+                    <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-200">
                       {item.title}
                     </h3>
 
@@ -160,14 +160,14 @@ export default function QuickStats({ query }) {
                   </p>
 
                   {/* 트렌드 */}
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                  <p className="text-sm text-gray-500 dark:text-gray-300">
                     {item.trend}
                   </p>
                 </div>
 
                 {/* 설명 */}
                 <div className="mt-4 border-t border-gray-200 dark:border-gray-700 pt-3">
-                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+                  <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed">
                     {item.desc}
                   </p>
                 </div>
