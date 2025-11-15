@@ -171,10 +171,16 @@ export default function ResultsPage() {
             ) : (
               <>
                 {/* AI 요약 정보 (RAG 응답 주요 텍스트) */}
-                <AISummary query={query} answer={ragData?.answer} />
+                <AISummary query={query} aiSummary={ragData?.answer} />
 
                 {/* 간단 통계 UI */}
-                <QuickStats query={query} statistics={ragData?.statistics} />
+                <QuickStats 
+                  query={query} 
+                  statistics={ragData?.statistics} 
+                  demographics={ragData?.demographics}
+                  regionDistribution={ragData?.region_distribution}
+                  totalRespondents={ragData?.total_respondents}
+                />
 
                 {/* 차트 모음 + 데이터 테이블 */}
                 <ChartSection query={query} data={ragData} />

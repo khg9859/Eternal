@@ -19,6 +19,17 @@ load_dotenv()
 from LLMlangchan import hybrid_answer
 from search.rag_pipeline import rag_search_pipeline
 
+# ai_summary import 시도
+try:
+    import sys
+    ai_summary_path = os.path.join(os.path.dirname(__file__), '..', 'Eternal_DT', 'Eternal', 'Data', 'search')
+    sys.path.append(ai_summary_path)
+    from ai_summary import summarize_agg_results
+    print(f"[INFO] ai_summary 모듈 로드 성공: {ai_summary_path}")
+except Exception as e:
+    print(f"[WARNING] ai_summary 모듈 로드 실패: {e}")
+    summarize_agg_results = None
+
 app = FastAPI(title="Eternel API", description="자연어 질의 기반 패널 데이터 검색 API")
 
 # CORS 설정 (프론트엔드와 연결을 위해)
@@ -184,17 +195,52 @@ async def rag_search(req: RAGRequest):
         # rag_pipeline 실행
         result = rag_search_pipeline(req.query, top_k=1, use_gpt_parsing=True)
         
+        # AI 요약 생성 (ai_summary.py 사용)
+        ai_summary_text = result.get("answer_summary", "답변을 생성할 수 없습니다.")
+        
+        if summarize_agg_results:
+            try:
+                # rag_search_pipeline의 결과를 ai_summary에 맞는 형식으로 변환
+                statistics = result.get("statistics", [])
+                
+                if statistics and len(statistics) > 0:
+                    # value_counts 형식으로 변환
+                    value_counts = {"total_responses": result.get("total_respondents", 0)}
+                    for stat in statistics:
+                        value_counts[stat['answer_text']] = stat['count']
+                    
+                    # ai_summary가 기대하는 형식으로 변환
+                    agg_results = {
+                        "query_results": {
+                            "question_1": {
+                                "q_title": statistics[0].get('q_title', '질문'),
+                                "codebook_id": statistics[0].get('question_id', 'unknown'),
+                                "value_counts": value_counts
+                            }
+                        }
+                    }
+                    
+                    print(f"[DEBUG] AI 요약 생성 시도...")
+                    ai_summary_text = summarize_agg_results(req.query, agg_results)
+                    print(f"[DEBUG] AI 요약 생성 완료")
+            except Exception as summary_error:
+                print(f"[WARNING] AI 요약 생성 실패: {summary_error}")
+                import traceback
+                traceback.print_exc()
+        
         # 프론트엔드에 필요한 정보를 포함하여 반환
         return {
             "query": req.query,
             "session_id": req.session_id,
-            "answer": result.get("answer_summary", "답변을 생성할 수 없습니다."),
+            "answer": ai_summary_text,  # AI 요약 사용
             "statistics": result.get("statistics", []),
             "total_respondents": result.get("total_respondents", 0),
             "total_answers": result.get("total_answers", 0),
             "answer_data": result.get("answer_data", []),  # 전체 데이터
             "demographics": result.get("demographics", {}),  # 나이대 분포 (인원수)
             "demographics_percent": result.get("demographics_percent", {}),  # 나이대 분포 (퍼센트)
+            "region_distribution": result.get("region_distribution", {}),  # 지역 분포 (인원수)
+            "region_distribution_percent": result.get("region_distribution_percent", {}),  # 지역 분포 (퍼센트)
             "unique_respondents_sample": result.get("unique_respondents_sample", [])
         }
     except Exception as e:

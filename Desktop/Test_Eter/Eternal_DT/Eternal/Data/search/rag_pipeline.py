@@ -424,10 +424,39 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
             result['demographics'] = demographics
             result['demographics_percent'] = demographics_percent
             print(f"[Step 5] 나이대 분포: {demographics} ({demographics_percent})")
+            
+            # 지역별 분포 추가
+            cur.execute("""
+                SELECT region, COUNT(*) as count
+                FROM metadata
+                WHERE mb_sn = ANY(%s) AND region IS NOT NULL
+                GROUP BY region
+                ORDER BY count DESC
+                LIMIT 5
+            """, (unique_respondents,))
+            
+            region_data = cur.fetchall()
+            total_region = sum(row[1] for row in region_data)
+            
+            region_distribution = {}
+            region_distribution_percent = {}
+            for row in region_data:
+                region = row[0]
+                count = row[1]
+                percentage = round((count / total_region * 100), 2) if total_region > 0 else 0
+                region_distribution[region] = count
+                region_distribution_percent[region] = percentage
+            
+            result['region_distribution'] = region_distribution
+            result['region_distribution_percent'] = region_distribution_percent
+            print(f"[Step 5] 지역 분포: {region_distribution} ({region_distribution_percent})")
+            
             cur.close()
         else:
             result['demographics'] = {}
             result['demographics_percent'] = {}
+            result['region_distribution'] = {}
+            result['region_distribution_percent'] = {}
         
         print("\n" + "=" * 70)
         print(f"[Complete] 총 {result['total_respondents']}명의 응답자, {result['total_answers']}개의 답변")

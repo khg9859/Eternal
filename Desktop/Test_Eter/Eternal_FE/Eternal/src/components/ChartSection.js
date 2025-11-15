@@ -97,26 +97,32 @@ export default function ChartSection({ query, data }) {
     // statistics 데이터를 차트용으로 변환
     const statistics = data.statistics || [];
     
-    // 상위 5개 답변을 카테고리로 사용
-    const topAnswers = statistics.slice(0, 5);
-    const category_ratio = {};
-    topAnswers.forEach(stat => {
-      // 답변 텍스트가 너무 길면 축약
-      const shortText = stat.answer_text.length > 20 
-        ? stat.answer_text.substring(0, 20) + '...' 
-        : stat.answer_text;
-      category_ratio[shortText] = stat.percentage;
-    });
+    // 지역별 분포 사용 (region_distribution_percent가 있으면 사용, 없으면 statistics 사용)
+    const category_ratio = data.region_distribution_percent || {};
+    
+    // region_distribution_percent가 없으면 statistics의 상위 5개 사용
+    if (Object.keys(category_ratio).length === 0) {
+      const topAnswers = statistics.slice(0, 5);
+      topAnswers.forEach(stat => {
+        const shortText = stat.answer_text.length > 20 
+          ? stat.answer_text.substring(0, 20) + '...' 
+          : stat.answer_text;
+        category_ratio[shortText] = stat.percentage;
+      });
+    }
     
     // 실제 demographics 데이터 사용 (백엔드에서 가져옴)
     // 퍼센트 데이터가 있으면 사용, 없으면 인원수 사용
     const demographics = data.demographics_percent || data.demographics || { "20대": 0, "30대": 0, "40대": 0, "50대": 0 };
     
-    // 응답 순위 데이터 (상위 3개)
+    // 응답 순위 데이터 (상위 3개) - 실제 항목명 사용
     const topRankings = statistics.slice(0, 3);
     const ranking_data = {};
-    topRankings.forEach((stat, index) => {
-      const label = `${index + 1}위`;
+    topRankings.forEach((stat) => {
+      // 항목명이 너무 길면 축약
+      const label = stat.answer_text.length > 15 
+        ? stat.answer_text.substring(0, 15) + '...' 
+        : stat.answer_text;
       ranking_data[label] = stat.percentage;
     });
     
