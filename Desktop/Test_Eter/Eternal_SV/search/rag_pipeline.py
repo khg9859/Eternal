@@ -387,7 +387,7 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
         # 벡터 유사도로 먼저 좁힌 후 metadata 필터 적용
         result = get_answer_statistics(conn, similar_question_ids, query_vector, respondent_ids, limit=500)
         
-        # Step 5: 응답자들의 나이대 분포 조회
+                # Step 5: 응답자들의 나이대 분포 조회
         unique_respondents = list(set([answer['respondent_id'] for answer in result['answer_data']]))
         if unique_respondents:
             cur = conn.cursor()
@@ -428,6 +428,50 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
         else:
             result['demographics'] = {}
             result['demographics_percent'] = {}
+
+        # ✅ Step 6: 지역 분포 조회 (퍼센트까지 계산)
+        if unique_respondents:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT 
+                    region,
+                    COUNT(*) AS count
+                FROM metadata
+                WHERE mb_sn = ANY(%s)
+                  AND region IS NOT NULL
+                GROUP BY region
+                ORDER BY count DESC
+            """, (unique_respondents,))
+            
+            region_rows = cur.fetchall()
+            cur.close()
+
+            total_region = sum(row[1] for row in region_rows) if region_rows else 0
+
+            region_distribution = {}
+            region_distribution_percent = {}
+
+            for region, count in region_rows:
+                region_distribution[region] = count
+                if total_region > 0:
+                    # 소수점 2자리까지 퍼센트
+                    pct = round(count / total_region * 100, 2)
+                else:
+                    pct = 0.0
+                region_distribution_percent[region] = pct
+
+            result['region_distribution'] = region_distribution
+            result['region_distribution_percent'] = region_distribution_percent
+
+             # 🔍 디버그 출력 (퍼센트 + 인원수 함께)
+            print("\n[Step 6] 지역별 응답률 비중 (%):")
+            for region, count in region_rows:
+                pct = region_distribution_percent.get(region, 0.0)
+                print(f"  - {region}: {pct}% ({count}명)")
+        else:
+            result['region_distribution'] = {}
+            result['region_distribution_percent'] = {}
+
         
         print("\n" + "=" * 70)
         print(f"[Complete] 총 {result['total_respondents']}명의 응답자, {result['total_answers']}개의 답변")

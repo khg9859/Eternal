@@ -97,17 +97,34 @@ export default function ChartSection({ query, data }) {
     // statistics 데이터를 차트용으로 변환
     const statistics = data.statistics || [];
     
-    // 지역별 분포 사용 (region_distribution_percent가 있으면 사용, 없으면 statistics 사용)
-    const category_ratio = data.region_distribution_percent || {};
-    
-    // region_distribution_percent가 없으면 statistics의 상위 5개 사용
-    if (Object.keys(category_ratio).length === 0) {
+    // ✅ 지역별 분포 데이터 우선 사용
+    const regionPercent = data.region_distribution_percent || {};
+    const regionCount = data.region_distribution || {};
+
+    let region_ratio = {};
+
+    if (Object.keys(regionPercent).length > 0) {
+      // 퍼센트가 이미 계산된 경우
+      region_ratio = regionPercent;
+    } else if (Object.keys(regionCount).length > 0) {
+      // 인원수만 있는 경우 → 퍼센트로 변환
+      const total = Object.values(regionCount).reduce((sum, v) => sum + v, 0);
+      region_ratio = Object.fromEntries(
+        Object.entries(regionCount).map(([region, count]) => [
+          region,
+          total > 0 ? Math.round((count / total) * 10000) / 100 : 0, // 소수점 2자리
+        ])
+      );
+    } else {
+      // 🔁 백엔드에서 지역 데이터가 아직 없으면 예전처럼 statistics 기준 상위 5개 사용 (백업용)
       const topAnswers = statistics.slice(0, 5);
-      topAnswers.forEach(stat => {
-        const shortText = stat.answer_text.length > 20 
-          ? stat.answer_text.substring(0, 20) + '...' 
-          : stat.answer_text;
-        category_ratio[shortText] = stat.percentage;
+      region_ratio = {};
+      topAnswers.forEach((stat) => {
+        const shortText =
+          stat.answer_text.length > 20
+            ? stat.answer_text.substring(0, 20) + "..."
+            : stat.answer_text;
+        region_ratio[shortText] = stat.percentage;
       });
     }
     
@@ -182,10 +199,10 @@ export default function ChartSection({ query, data }) {
       categoryChart = new Chart(document.getElementById("categoryChart"), {
       type: "doughnut",
       data: {
-        labels: Object.keys(category_ratio),
+        labels: Object.keys(region_ratio),
         datasets: [
           {
-            data: Object.values(category_ratio),
+            data: Object.values(region_ratio),
             backgroundColor: isDark
               ? [palette.primary, palette.secondary, "#F472B6", palette.accent, "#34D399"]
               : ["#6366F1", "#8B5CF6", "#EC4899", "#3B82F6", "#10B981"],
@@ -203,6 +220,15 @@ export default function ChartSection({ query, data }) {
               font: { size: 14, weight: "600" } 
             },
           },
+          tooltip: {
+              callbacks: {
+              label: function (context) {
+                const label = context.label || "";
+                const value = context.raw ?? 0;
+                return `${label}: ${value}%`;
+          },
+        },
+      },
         },
         maintainAspectRatio: false,
       },

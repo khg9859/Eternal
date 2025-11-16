@@ -17,6 +17,20 @@ import React, { useState, useEffect } from "react";
   - 응답: { data: [...] }
 */
 
+// ✅ 응답자 ID 블라인드 처리 함수
+function maskRespondentId(id) {
+  if (!id || typeof id !== "string") return "";
+
+  // 길이가 6 이하라면 전체 마스킹
+  if (id.length <= 6) return "••••••";
+
+  const start = id.slice(0, 4);     // 앞 4글자
+  const end = id.slice(-2);         // 뒤 2글자
+  const masked = "•".repeat(id.length - 6); // 중간 블라인드
+
+  return `${start}${masked}${end}`;
+}
+
 export default function DataTable({ query, data }) {
   const [tableData, setTableData] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -31,7 +45,10 @@ export default function DataTable({ query, data }) {
         id: item.answer_id || index + 1,
         category: item.q_title || "기타",
         answer: item.answer_text || item.answer_value,
-        respondent_id: item.respondent_id,
+        
+        // ✅ 응답자 ID 마스킹 적용
+        respondent_id: maskRespondentId(item.respondent_id),
+
         question_id: item.question_id,
       }));
       setTableData(formattedData);
@@ -48,10 +65,10 @@ export default function DataTable({ query, data }) {
   // 정렬
   const sortedData = [...filteredData].sort((a, b) => {
     if (!sortConfig.key) return 0;
-    
+
     const aVal = a[sortConfig.key];
     const bVal = b[sortConfig.key];
-    
+
     if (aVal < bVal) return sortConfig.direction === "asc" ? -1 : 1;
     if (aVal > bVal) return sortConfig.direction === "asc" ? 1 : -1;
     return 0;
@@ -147,7 +164,12 @@ export default function DataTable({ query, data }) {
                 <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100">{row.id}</td>
                 <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100">{row.category}</td>
                 <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100">{row.answer}</td>
-                <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400 text-xs">{row.respondent_id}</td>
+
+                {/* ✅ 마스킹된 응답자 ID 표시 */}
+                <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400 text-xs">
+                  {row.respondent_id}
+                </td>
+
                 <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400 text-xs">{row.question_id}</td>
               </tr>
             ))}
@@ -165,11 +187,11 @@ export default function DataTable({ query, data }) {
         >
           이전
         </button>
-        
+
         <span className="text-sm text-gray-600 dark:text-gray-300">
           {currentPage} / {totalPages}
         </span>
-        
+
         <button
           onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
           disabled={currentPage === totalPages}
@@ -182,3 +204,4 @@ export default function DataTable({ query, data }) {
     </div>
   );
 }
+
