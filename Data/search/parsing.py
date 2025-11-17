@@ -143,7 +143,7 @@ def parse_query_with_gpt(user_query: str) -> dict:
 if __name__ == "__main__":
     
     # [테스트 1] 하이브리드 쿼리 (필터 + 의미)
-    query1 = "서울에서 운동을 좋아하는 여자"
+    query1 = "서울에서 운동을 좋아하는 남자"
     result1 = parse_query_with_gpt(query1)
     print("--- [결과 1] ---")
     print(json.dumps(result1, indent=2, ensure_ascii=False))

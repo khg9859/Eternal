@@ -2,41 +2,41 @@
 
 ## 📂 데이터 구성 및 테이블 설명
 
-| **데이터 계열** | **구성 테이블** | **설명** |
-|------------------|------------------|-----------|
-| **qpoll 계열** | `metadata`, `respondents`, `answers` | 인구통계 정보(`metadata`) + 응답 내용(`answers`) 모두 존재.<br>`respondents`는 패널 ID(`mb_sn`)와 벡터 저장용으로 사용. |
-| **welcome_1st** | `respondents`, `metadata` | 지역·나이 등 기본 속성만 존재 → 별도의 `answers` 불필요.<br>`respondents`로 식별, `metadata`에 응답 내용 저장.<br>(1st의 응답내용 = `metadata`) |
-| **welcome_2nd** | `respondents`, `answers` | 문항 중심 응답 데이터만 존재 → `metadata` 없이 `answers`로 관리. |
-| **공통 문항 정보** | `codebooks` | 모든 파일의 문항(`Q1~Qn`)과 보기 정보를 통합 관리.<br>`answers`와 `question_id` 기준으로 연결. |
+| **데이터 계열**    | **구성 테이블**                      | **설명**                                                                                                                                        |
+| ------------------ | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **qpoll 계열**     | `metadata`, `respondents`, `answers` | 인구통계 정보(`metadata`) + 응답 내용(`answers`) 모두 존재.<br>`respondents`는 패널 ID(`mb_sn`)와 벡터 저장용으로 사용.                         |
+| **welcome_1st**    | `respondents`, `metadata`            | 지역·나이 등 기본 속성만 존재 → 별도의 `answers` 불필요.<br>`respondents`로 식별, `metadata`에 응답 내용 저장.<br>(1st의 응답내용 = `metadata`) |
+| **welcome_2nd**    | `respondents`, `answers`             | 문항 중심 응답 데이터만 존재 → `metadata` 없이 `answers`로 관리.                                                                                |
+| **공통 문항 정보** | `codebooks`                          | 모든 파일의 문항(`Q1~Qn`)과 보기 정보를 통합 관리.<br>`answers`와 `question_id` 기준으로 연결.                                                  |
 
 ---
 
 ## 🧱 테이블 구조
 
-| **테이블명** | **컬럼명** | **설명** |
-|---------------|-------------|-----------|
-| `respondents` | `mb_sn`, `profile_vector` | 고유 패널 번호(`mb_sn`), 프로필 벡터(`p_vector`) |
-| `answers` | `answer_id`, `mb_sn`, `question_id`, `answer_value`, `a_vector` | 응답 식별자, 응답자 번호, 코드북 내 문항 번호, 답변값, 답변 임베딩 |
-| `metadata` | `metadata_id`, `mb_sn`, `mobile_carrier`, `gender`, `birth_year`,`age`, `region` | 인구통계 메타데이터 (이동통신사, 성별, 태어난해, 연령, 지역 등) |
-| `codebooks` | `codebook_id`, `codebook_data (jsonb)`, `q_vector` | 코드북 파일 ID, 문항 내용(JSON 형식), 문항 임베딩 벡터 |
+| **테이블명**  | **컬럼명**                                                                       | **설명**                                                           |
+| ------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `respondents` | `mb_sn`, `profile_vector`                                                        | 고유 패널 번호(`mb_sn`), 프로필 벡터(`p_vector`)                   |
+| `answers`     | `answer_id`, `mb_sn`, `question_id`, `answer_value`, `a_vector`                  | 응답 식별자, 응답자 번호, 코드북 내 문항 번호, 답변값, 답변 임베딩 |
+| `metadata`    | `metadata_id`, `mb_sn`, `mobile_carrier`, `gender`, `birth_year`,`age`, `region` | 인구통계 메타데이터 (이동통신사, 성별, 태어난해, 연령, 지역 등)    |
+| `codebooks`   | `codebook_id`, `codebook_data (jsonb)`, `q_vector`                               | 코드북 파일 ID, 문항 내용(JSONB 형식), 문항 임베딩 벡터            |
 
 ---
 
 ## ⚙️ 코드 실행 순서
 
-> ⚠️ *requirements.txt의 모든 파이썬 라이브러리가 이미 설치되어 있다고 가정합니다.*
+> ⚠️ _requirements.txt의 모든 파이썬 라이브러리가 이미 설치되어 있다고 가정합니다._
 
-> ⚠️ *.env를 작성한 코드에 맞게 추가&수정해주세요.*
+> ⚠️ _.env를 작성한 코드에 맞게 추가&수정해주세요._
 
-
-* DB_HOST =  # 데이터베이스 서버 주소 
-* DB_PORT =  # 데이터베이스 포트
-* DB_NAME =  # 연결할 데이터베이스 이름
-* DB_USER = # 데이터베이스 사용자 ID
-* DB_PASSWORD = # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
-* INPUT_PATH = # 데이터들이 있는 폴더/디렉터리 경로
+- DB_HOST = # 데이터베이스 서버 주소
+- DB_PORT = # 데이터베이스 포트
+- DB_NAME = # 연결할 데이터베이스 이름
+- DB_USER = # 데이터베이스 사용자 ID
+- DB_PASSWORD = # 데이터베이스 비밀번호 (실제 환경에서는 보안에 유의)
+- INPUT_PATH = # 데이터들이 있는 폴더/디렉터리 경로
 
 # 원본 파일들이 들어있는 폴더 경로
+
 INPUT_FOLDER = os.getenv('INPUT_PATH')
 
 ---
@@ -44,24 +44,25 @@ INPUT_FOLDER = os.getenv('INPUT_PATH')
 ### 1️⃣ 데이터 파일 준비
 
 #### 🧩 Qpoll 계열
-- 데이터 경로:  ./Data/db_insert/panelData/
+
+- 데이터 경로: ./Data/db_insert/panelData/
 - 필요한 `.xlsx` 파일을 아래 폴더로 복사:./Data/db_insert/execptFile/
 
-
 #### 🧩 Welcome 1st / 2nd 계열
-- 위와 동일하게 실행  
-- 단, **파일 확장자는 `.csv`**  
-- 코드북(`welcome_*_codebook.csv` 등)이 있다면 함께 복사해야 함  
+
+- 위와 동일하게 실행
+- 단, **파일 확장자는 `.csv`**
+- 코드북(`welcome_*_codebook.csv` 등)이 있다면 함께 복사해야 함
 
 ---
 
 ### 2️⃣ 데이터 삽입 코드 수정
 
-| **파일명** | **수정 항목** |
-|-------------|---------------|
-| `insert_1st.py`, `insert_2nd.py` | 데이터 파일 경로 및 파일명, DB 설정값 |
-| `insert_qpoll.py` | 실행 경로 기준으로 파일 경로 및 DB 설정값 수정 |
-| `drop_table.py` | DB초기화(모든 테이블 DROP)|
+| **파일명**                       | **수정 항목**                                  |
+| -------------------------------- | ---------------------------------------------- |
+| `insert_1st.py`, `insert_2nd.py` | 데이터 파일 경로 및 파일명, DB 설정값          |
+| `insert_qpoll.py`                | 실행 경로 기준으로 파일 경로 및 DB 설정값 수정 |
+| `drop_table.py`                  | DB초기화(모든 테이블 DROP)                     |
 
 ---
 
@@ -83,11 +84,13 @@ psql 환경에서 데이터가 정상적으로 삽입되고
 ```
 
 ### 6️⃣ 다중 조건 필터 & 의미기반 질의(semantic query) 파싱 기능
-테스트 
+
+테스트
+
 ```bash
 python ./Data/search/parsing.py
 
-* 예시로 들어간 테스트 문이 json화 된 필터:json 와 질의: str를 분리하여 반환함.* 
+* 예시로 들어간 테스트 문이 json화 된 필터와 질의를 분리하여 반환함.*
 {
   "filters": [
     {
@@ -118,8 +121,72 @@ python ./Data/search/parsing.py
     {
       "column": "mobile_carrier",
       "operator": "=",
-      "value": "SKT"
+      "value": "LG"
     }
   ],
   "semantic_query": "문화생활 만족도"
+```
+
+### 7️⃣ 필터 기반으로 동적 SQL문 작성 기능(makeSQL.py)
+
+```bash
+
+python ./Data/search/makeSQL.py
+
+해당 파이썬 코드 내 함수 사용
+build_metadata_where_clause(filters_list, table_name="metadata")
+
+필터 예시:
+"filters": [
+    {
+      "column": "region",
+      "operator": "LIKE",
+      "value": "서울%"
+    },
+    {
+      "column": "gender",
+      "operator": "=",
+      "value": "남성"
+    },
+    {
+      "column": "gender",
+      "operator": "=",
+      "value": "여성"
+    }
+  ],
+  "semantic_query": "운동을 좋아하는"
+
+  실행결과 ⬇️
+
+  생성된 쿼리 (psycopg2용): SELECT mb_sn FROM metadata WHERE (region LIKE %s) AND (gender = %s OR gender = %s);
+  쿼리 파라미터 (psycopg2용): ['서울%', '남성', '여성']
+```
+
+### 8️⃣ 백엔드에서 받은 자료를 바탕으로 AI 요약 기능 제공
+
+```bash
+
+  python ./Data/search/ai_summary.py
+
+  예시 자료:
+  "query_results": {
+        "w2_Q5_1": {
+          "q_title": "직무",
+          "codebook_id": "w2_Q5_1",
+          "value_counts": {
+            "total_responses": 1877,
+            "생산•정비•기능•노무": 233,
+            "디자인": 23,
+            "건설•건축•토목•환경": 143,
+            .
+            .
+            .
+          }
+        }
+  }
+
+해당 코드내 summarize_agg_results(user_query: str, agg_results: dict) 함수 사용
+
+이후 OpenAI의 gpt 모델(개인 설정)에 따라 제공한 AI 요약 기능 제공
+
 ```
