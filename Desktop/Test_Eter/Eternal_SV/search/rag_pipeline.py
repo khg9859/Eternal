@@ -446,12 +446,28 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
             region_rows = cur.fetchall()
             cur.close()
 
-            total_region = sum(row[1] for row in region_rows) if region_rows else 0
+            # 🔹 상위 행정구역(공백 없는 단일 이름)은 제외
+            #    예) '경기', '서울', '부산광역시', '제주특별자치도' 등
+            def _is_top_level_region(name: str) -> bool:
+                return " " not in name.strip()
+
+            filtered_region_rows = [
+                (region, count)
+                for region, count in region_rows
+                if not _is_top_level_region(region)
+            ]
+
+            # 만약 전부 제거돼서 아무 것도 안 남으면(예외 케이스),
+            # 차트가 완전히 비는 걸 방지하기 위해 원본을 그대로 사용
+            if not filtered_region_rows:
+                filtered_region_rows = region_rows
+
+            total_region = sum(count for _, count in filtered_region_rows) if filtered_region_rows else 0
 
             region_distribution = {}
             region_distribution_percent = {}
 
-            for region, count in region_rows:
+            for region, count in filtered_region_rows:
                 region_distribution[region] = count
                 if total_region > 0:
                     # 소수점 2자리까지 퍼센트
@@ -463,14 +479,15 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
             result['region_distribution'] = region_distribution
             result['region_distribution_percent'] = region_distribution_percent
 
-             # 🔍 디버그 출력 (퍼센트 + 인원수 함께)
+            # 🔍 디버그 출력 (퍼센트 + 인원수 함께)
             print("\n[Step 6] 지역별 응답률 비중 (%):")
-            for region, count in region_rows:
+            for region, count in filtered_region_rows:
                 pct = region_distribution_percent.get(region, 0.0)
                 print(f"  - {region}: {pct}% ({count}명)")
         else:
             result['region_distribution'] = {}
             result['region_distribution_percent'] = {}
+
 
         
         print("\n" + "=" * 70)

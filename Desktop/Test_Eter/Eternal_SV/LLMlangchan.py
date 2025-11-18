@@ -153,7 +153,7 @@ def hybrid_answer(
     user_query: str,
     k_questions: int = 5,
     k_answers: int = 500,
-    topn_return: int = 30,
+    topn_return: int = 1,
 ) -> Dict[str, Any]:
     print(f"\n{'=' * 25}\n[ RAG 파이프라인 시작 ]\n- 사용자 질문: \"{user_query}\"\n{'=' * 25}")
 
