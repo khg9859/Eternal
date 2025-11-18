@@ -151,7 +151,7 @@ def _attach_human_readable_labels(rows: List[Dict[str, Any]]) -> List[Dict[str, 
 # -----------------------
 def hybrid_answer(
     user_query: str,
-    k_questions: int = 5,
+    k_questions: int = 1,
     k_answers: int = 500,
     topn_return: int = 1,
 ) -> Dict[str, Any]:
@@ -437,6 +437,6 @@ def hybrid_answer(
 
 # quick manual test
 if __name__ == "__main__":
-    q = "서울 사는 30대 남성 중 SKT 사용자들의 경제 만족도와 불만 요인을 요약해줘"
+    q = "서울 사는 30대 남성이 이용하는 OTT 서비스는 몇 개?"
     res = hybrid_answer(q)
     print(json.dumps(res, ensure_ascii=False, indent=2))

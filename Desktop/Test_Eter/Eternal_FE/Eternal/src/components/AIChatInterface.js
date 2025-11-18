@@ -123,7 +123,7 @@ const handleSendMessage = async () => {
 
   try {
     // ✅ Eternal_SV 백엔드 호출
-    const response = await fetch('http://localhost:8000/rag/search', {
+    const response = await fetch('http://localhost:8000/rag/chatbot', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
