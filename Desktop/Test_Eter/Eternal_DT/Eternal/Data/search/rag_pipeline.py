@@ -186,7 +186,7 @@ def search_similar_questions(conn, query_vector, top_k=TOP_K_QUESTIONS):
     return [row[0] for row in results]
 
 # --- Step 3: 답변 통계 조회 (최적화된 쿼리) ---
-def get_answer_statistics(conn, codebook_ids, query_vector, respondent_filter=None, limit=500):
+def get_answer_statistics(conn, codebook_ids, query_vector, respondent_filter=None):
     """
     선정된 질문에 답변한 사람들의 통계 정보 반환 (쿼리 최적화)
     
@@ -218,10 +218,9 @@ def get_answer_statistics(conn, codebook_ids, query_vector, respondent_filter=No
             JOIN codebooks c ON a.question_id = c.codebook_id
             WHERE a.question_id = ANY(%s)
               AND a.mb_sn = ANY(%s)
-            ORDER BY distance
-            LIMIT %s;
+            ORDER BY distance;
         """
-        params = (vector_list, codebook_ids, respondent_filter, limit)
+        params = (vector_list, codebook_ids, respondent_filter)
     else:
         # metadata 필터 없이 벡터 유사도만
         query = f"""
@@ -239,10 +238,9 @@ def get_answer_statistics(conn, codebook_ids, query_vector, respondent_filter=No
             FROM answers a
             JOIN codebooks c ON a.question_id = c.codebook_id
             WHERE a.question_id = ANY(%s)
-            ORDER BY distance
-            LIMIT %s;
+            ORDER BY distance;
         """
-        params = (vector_list, codebook_ids, limit)
+        params = (vector_list, codebook_ids)
     
     cur.execute(query, params)
     results = cur.fetchall()
@@ -385,7 +383,7 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
         
         # Step 4: 답변 통계 조회 (최적화된 쿼리)
         # 벡터 유사도로 먼저 좁힌 후 metadata 필터 적용
-        result = get_answer_statistics(conn, similar_question_ids, query_vector, respondent_ids, limit=500)
+        result = get_answer_statistics(conn, similar_question_ids, query_vector, respondent_ids)
         
         # Step 5: 응답자들의 나이대 분포 조회
         unique_respondents = list(set([answer['respondent_id'] for answer in result['answer_data']]))
