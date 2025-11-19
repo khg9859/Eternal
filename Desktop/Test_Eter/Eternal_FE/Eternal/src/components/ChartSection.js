@@ -39,46 +39,46 @@ import DataTable from "./DataTable";
   RAG 연결 시 `더미 데이터 부분`만 fetch로 교체하면 된다.
 */
 
-export default function ChartSection({ query, data }) {
+export default function ChartSection({ query, data, darkMode }) {
 
   useEffect(() => {
     let ageChart, categoryChart, sentimentTrustChart;
-    
+
     // data가 없으면 차트를 그리지 않음
     if (!data || !data.statistics) {
       return;
     }
-    
+
     // -------------------------------------------------------
     // ① 라이트/다크 모드 감지 → 팔레트 지정
     // -------------------------------------------------------
-    const isDark = document.documentElement.classList.contains("dark");
+    const isDark = darkMode;
 
     const palette = isDark
       ? {
-          text: "#FFFFFF",
-          grid: "rgba(255,255,255,0.15)",
-          border: "#4B5563",
-          bg: "#111827",
-          primary: "#818CF8",
-          secondary: "#A78BFA",
-          accent: "#60A5FA",
-          positive: "#22C55E",
-          neutral: "#EAB308",
-          negative: "#EF4444",
-        }
+        text: "#FFFFFF",
+        grid: "rgba(255,255,255,0.15)",
+        border: "#4B5563",
+        bg: "#111827",
+        primary: "#818CF8",
+        secondary: "#A78BFA",
+        accent: "#60A5FA",
+        positive: "#22C55E",
+        neutral: "#EAB308",
+        negative: "#EF4444",
+      }
       : {
-          text: "#1F2937",
-          grid: "rgba(0,0,0,0.06)",
-          border: "#D1D5DB",
-          bg: "#FFFFFF",
-          primary: "#6366F1",
-          secondary: "#8B5CF6",
-          accent: "#3B82F6",
-          positive: "rgba(34,197,94,1)",
-          neutral: "rgba(250,204,21,1)",
-          negative: "rgba(239,68,68,1)",
-        };
+        text: "#1F2937",
+        grid: "rgba(0,0,0,0.06)",
+        border: "#D1D5DB",
+        bg: "#FFFFFF",
+        primary: "#6366F1",
+        secondary: "#8B5CF6",
+        accent: "#3B82F6",
+        positive: "rgba(34,197,94,1)",
+        neutral: "rgba(250,204,21,1)",
+        negative: "rgba(239,68,68,1)",
+      };
 
     // -------------------------------------------------------
     // ② Chart.js 기본 전역 설정
@@ -96,7 +96,7 @@ export default function ChartSection({ query, data }) {
     // -------------------------------------------------------
     // statistics 데이터를 차트용으로 변환
     const statistics = data.statistics || [];
-    
+
     // ✅ 지역별 분포 데이터 우선 사용
     const regionPercent = data.region_distribution_percent || {};
     const regionCount = data.region_distribution || {};
@@ -127,32 +127,32 @@ export default function ChartSection({ query, data }) {
         region_ratio[shortText] = stat.percentage;
       });
     }
-    
+
     // 실제 demographics 데이터 사용 (백엔드에서 가져옴)
     // 퍼센트 데이터가 있으면 사용, 없으면 인원수 사용
     const demographics = data.demographics_percent || data.demographics || { "20대": 0, "30대": 0, "40대": 0, "50대": 0 };
-    
+
     // 응답 순위 데이터 (상위 3개) - 실제 항목명 사용
     const topRankings = statistics.slice(0, 3);
     const ranking_data = {};
     topRankings.forEach((stat) => {
       // 항목명이 너무 길면 축약
-      const label = stat.answer_text.length > 15 
-        ? stat.answer_text.substring(0, 15) + '...' 
+      const label = stat.answer_text.length > 15
+        ? stat.answer_text.substring(0, 15) + '...'
         : stat.answer_text;
       ranking_data[label] = stat.percentage;
     });
-    
+
     // 차트 렌더링
     (() => {
-      
+
       // 기존 차트 인스턴스 제거 (중요!)
       const existingAgeChart = Chart.getChart("ageChart");
       if (existingAgeChart) existingAgeChart.destroy();
-      
+
       const existingCategoryChart = Chart.getChart("categoryChart");
       if (existingCategoryChart) existingCategoryChart.destroy();
-      
+
       const existingSentimentChart = Chart.getChart("sentimentTrustChart");
       if (existingSentimentChart) existingSentimentChart.destroy();
 
@@ -160,112 +160,112 @@ export default function ChartSection({ query, data }) {
       // ④ 인구통계 차트 (Bar)
       // -------------------------------------------------------
       ageChart = new Chart(document.getElementById("ageChart"), {
-      type: "bar",
-      data: {
-        labels: Object.keys(demographics),
-        datasets: [
-          {
-            label: "참여 비율 (%)",
-            data: Object.values(demographics),
-            backgroundColor: isDark
-              ? [palette.primary, palette.secondary, "#A5B4FC", "#C4B5FD"]
-              : ["#6366F1", "#4F46E5", "#8B5CF6", "#A5B4FC"],
-            borderRadius: 6,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: {
-            beginAtZero: true,
-            grid: { color: palette.grid },
-            ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } },
-          },
-          x: {
-            grid: { color: palette.grid },
-            ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } },
+        type: "bar",
+        data: {
+          labels: Object.keys(demographics),
+          datasets: [
+            {
+              label: "참여 비율 (%)",
+              data: Object.values(demographics),
+              backgroundColor: isDark
+                ? [palette.primary, palette.secondary, "#A5B4FC", "#C4B5FD"]
+                : ["#6366F1", "#4F46E5", "#8B5CF6", "#A5B4FC"],
+              borderRadius: 6,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: { color: palette.grid },
+              ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } },
+            },
+            x: {
+              grid: { color: palette.grid },
+              ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } },
+            },
           },
         },
-      },
-    });
+      });
 
 
       // -------------------------------------------------------
       // ⑤ 지역별 응답 비율 (Doughnut)
       // -------------------------------------------------------
       categoryChart = new Chart(document.getElementById("categoryChart"), {
-      type: "doughnut",
-      data: {
-        labels: Object.keys(region_ratio),
-        datasets: [
-          {
-            data: Object.values(region_ratio),
-            backgroundColor: isDark
-              ? [palette.primary, palette.secondary, "#F472B6", palette.accent, "#34D399"]
-              : ["#6366F1", "#8B5CF6", "#EC4899", "#3B82F6", "#10B981"],
-            borderWidth: 0,
-          },
-        ],
-      },
-      options: {
-        cutout: "70%",
-        plugins: {
-          legend: {
-            position: "bottom",
-            labels: { 
-              color: isDark ? "#E5E7EB" : "#1F2937", 
-              font: { size: 14, weight: "600" } 
+        type: "doughnut",
+        data: {
+          labels: Object.keys(region_ratio),
+          datasets: [
+            {
+              data: Object.values(region_ratio),
+              backgroundColor: isDark
+                ? [palette.primary, palette.secondary, "#F472B6", palette.accent, "#34D399"]
+                : ["#6366F1", "#8B5CF6", "#EC4899", "#3B82F6", "#10B981"],
+              borderWidth: 0,
+            },
+          ],
+        },
+        options: {
+          cutout: "70%",
+          plugins: {
+            legend: {
+              position: "bottom",
+              labels: {
+                color: isDark ? "#E5E7EB" : "#1F2937",
+                font: { size: 14, weight: "600" }
+              },
+            },
+            tooltip: {
+              callbacks: {
+                label: function (context) {
+                  const label = context.label || "";
+                  const value = context.raw ?? 0;
+                  return `${label}: ${value}%`;
+                },
+              },
             },
           },
-          tooltip: {
-              callbacks: {
-              label: function (context) {
-                const label = context.label || "";
-                const value = context.raw ?? 0;
-                return `${label}: ${value}%`;
-          },
+          maintainAspectRatio: false,
         },
-      },
-        },
-        maintainAspectRatio: false,
-      },
-    });
+      });
 
 
       // -------------------------------------------------------
       // ⑥ 응답 순위 차트 (Bar)
       // -------------------------------------------------------
       sentimentTrustChart = new Chart(document.getElementById("sentimentTrustChart"), {
-      type: "bar",
-      data: {
-        labels: Object.keys(ranking_data),
-        datasets: [
-          {
-            label: "응답 비율 (%)",
-            data: Object.values(ranking_data),
-            backgroundColor: [palette.primary, palette.secondary, palette.accent],
-            borderRadius: 6,
+        type: "bar",
+        data: {
+          labels: Object.keys(ranking_data),
+          datasets: [
+            {
+              label: "응답 비율 (%)",
+              data: Object.values(ranking_data),
+              backgroundColor: [palette.primary, palette.secondary, palette.accent],
+              borderRadius: 6,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: "bottom",
+              labels: { color: palette.text, font: { size: 14, weight: "600" } },
+            },
           },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: "bottom",
-            labels: { color: palette.text, font: { size: 14, weight: "600" } },
+          scales: {
+            y: { beginAtZero: true, max: 100, grid: { color: palette.grid }, ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } } },
+            x: { grid: { color: palette.grid }, ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } } },
           },
         },
-        scales: {
-          y: { beginAtZero: true, max: 100, grid: { color: palette.grid }, ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } } },
-          x: { grid: { color: palette.grid }, ticks: { color: isDark ? "#E5E7EB" : "#1F2937", font: { weight: "bold" } } },
-        },
-      },
-    });
+      });
 
 
     })();
@@ -278,7 +278,7 @@ export default function ChartSection({ query, data }) {
       if (categoryChart) categoryChart.destroy();
       if (sentimentTrustChart) sentimentTrustChart.destroy();
     };
-  }, [data]); // data 변경 시 차트 다시 렌더링
+  }, [data, darkMode]); // data 또는 darkMode 변경 시 차트 다시 렌더링
 
 
   // -------------------------------------------------------
@@ -307,7 +307,7 @@ export default function ChartSection({ query, data }) {
 
         {/* ④ 감정/신뢰 */}
         <div className="bg-white/95 dark:bg-[#1E2028] rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-md">
-          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">응답 순위 및 성별 응답률</h3>
+          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-3">응답 순위</h3>
           <div className="h-[380px]"><canvas id="sentimentTrustChart"></canvas></div>
         </div>
       </div>

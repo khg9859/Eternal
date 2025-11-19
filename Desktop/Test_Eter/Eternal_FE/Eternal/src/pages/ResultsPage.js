@@ -51,6 +51,9 @@ export default function ResultsPage() {
   // UI 상태: 다크모드 여부
   const [darkMode, setDarkMode] = useState(false);
 
+  // 조회 기간 상태 (daily, weekly, monthly)
+  const [dateRange, setDateRange] = useState("daily");
+
   // AI 챗봇 열기 여부
   const [isChatOpen, setIsChatOpen] = useState(false);
 
@@ -68,12 +71,14 @@ export default function ResultsPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             query: query,
-            session_id: 'results_page_session'
+            query: query,
+            session_id: 'results_page_session',
+            date_range: dateRange
           })
         });
 
         if (!response.ok) throw new Error('RAG 검색 실패');
-        
+
         const data = await response.json();
         setRagData(data);
       } catch (error) {
@@ -84,7 +89,7 @@ export default function ResultsPage() {
     };
 
     fetchRagData();
-  }, [query]);
+  }, [query, dateRange]);
 
   return (
     // 다크모드 class를 최상위 div에 적용 → Tailwind dark: 제어 가능
@@ -174,23 +179,28 @@ export default function ResultsPage() {
                 <AISummary query={query} aiSummary={ragData?.answer} />
 
                 {/* 간단 통계 UI */}
-                <QuickStats 
-                  query={query} 
-                  statistics={ragData?.statistics} 
+                <QuickStats
+                  query={query}
+                  statistics={ragData?.statistics}
                   demographics={ragData?.demographics}
                   regionDistribution={ragData?.region_distribution}
                   totalRespondents={ragData?.total_respondents}
                 />
 
                 {/* 차트 모음 + 데이터 테이블 */}
-                <ChartSection query={query} data={ragData} />
+                <ChartSection query={query} data={ragData} darkMode={darkMode} />
               </>
             )}
           </div>
         </div>
 
         {/* 오른쪽 사이드 패널 */}
-        <SidePanel />
+        <SidePanel
+          query={query}
+          data={ragData}
+          dateRange={dateRange}
+          onDateRangeChange={setDateRange}
+        />
 
         {/* AI 챗봇 인터페이스 */}
         {isChatOpen ? (

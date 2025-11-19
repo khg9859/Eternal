@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   FiDownloadCloud,
   FiImage,
@@ -7,15 +7,102 @@ import {
   FiChevronRight,
 } from "react-icons/fi";
 import Logo from "./Logo";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 
-export default function SidePanel() {
+export default function SidePanel({ query, data, dateRange, onDateRangeChange }) {
   const [isOpen, setIsOpen] = useState(true);
+  const [recentSearches, setRecentSearches] = useState([]);
+
+  // 최근 검색어 로드 및 저장
+  useEffect(() => {
+    const saved = localStorage.getItem("recentSearches");
+    if (saved) {
+      setRecentSearches(JSON.parse(saved));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (query) {
+      let searches = JSON.parse(localStorage.getItem("recentSearches") || "[]");
+      // 중복 제거 및 최신 검색어를 위로
+      searches = searches.filter((s) => s !== query);
+      searches.unshift(query);
+      // 최대 5개 유지
+      if (searches.length > 5) searches.pop();
+
+      localStorage.setItem("recentSearches", JSON.stringify(searches));
+      setRecentSearches(searches);
+    }
+  }, [query]);
+
+  // 이미지 저장 핸들러
+  const handleImageExport = async () => {
+    const element = document.body; // 전체 페이지 캡처 (또는 특정 영역)
+    const canvas = await html2canvas(element);
+    const link = document.createElement("a");
+    link.download = `report-${query}-${Date.now()}.png`;
+    link.href = canvas.toDataURL();
+    link.click();
+  };
+
+  // PDF 다운로드 핸들러
+  const handlePdfExport = async () => {
+    const element = document.body;
+    const canvas = await html2canvas(element);
+    const imgData = canvas.toDataURL("image/png");
+
+    const pdf = new jsPDF("p", "mm", "a4");
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+    pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+    pdf.save(`report-${query}-${Date.now()}.pdf`);
+  };
+
+  // CSV 내보내기 핸들러
+  const handleCsvExport = () => {
+    if (!data) {
+      alert("내보낼 데이터가 없습니다.");
+      return;
+    }
+
+    // 간단한 CSV 생성 예시 (통계 데이터)
+    const headers = ["Category", "Value"];
+    const rows = [
+      ["Query", query],
+      ["Total Respondents", data.total_respondents || 0],
+      // 필요한 데이터 추가
+    ];
+
+    if (data.statistics) {
+      Object.entries(data.statistics).forEach(([key, val]) => {
+        rows.push([key, val]);
+      });
+    }
+
+    let csvContent = "data:text/csv;charset=utf-8,"
+      + headers.join(",") + "\n"
+      + rows.map(e => e.join(",")).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `data-${query}-${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // 통계 데이터 (없으면 기본값 0)
+  const totalData = data?.total_respondents || 0;
+  const searchCount = recentSearches.length; // 예시로 최근 검색어 수 사용
+  const activeFilters = 0; // 필터 기능 구현 시 연동
 
   return (
     <aside
-      className={`hidden lg:flex flex-col ${
-        isOpen ? "w-80 p-6" : "w-16 p-3"
-      } bg-gray-50 dark:bg-[#1E2028] border-l border-gray-200 dark:border-gray-700 shadow-inner rounded-l-2xl transition-all duration-500 relative`}
+      className={`hidden lg:flex flex-col ${isOpen ? "w-80 p-6" : "w-16 p-3"
+        } bg-gray-50 dark:bg-[#1E2028] border-l border-gray-200 dark:border-gray-700 shadow-inner rounded-l-2xl transition-all duration-500 relative`}
     >
       {/* 🔹 패널 접기/펼치기 버튼 */}
       <button
@@ -32,9 +119,9 @@ export default function SidePanel() {
       {/* 🔹 접힘 상태 (아이콘만) */}
       {!isOpen ? (
         <div className="flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 gap-6 mt-10">
-          <FiImage size={20} />
-          <FiFileText size={20} />
-          <FiDownloadCloud size={20} />
+          <FiImage size={20} onClick={handleImageExport} className="cursor-pointer hover:text-blue-500" title="이미지 저장" />
+          <FiFileText size={20} onClick={handlePdfExport} className="cursor-pointer hover:text-blue-500" title="PDF 다운로드" />
+          <FiDownloadCloud size={20} onClick={handleCsvExport} className="cursor-pointer hover:text-blue-500" title="CSV 다운로드" />
         </div>
       ) : (
         <>
@@ -59,15 +146,18 @@ export default function SidePanel() {
               📅 조회 기간
             </h3>
             <div className="flex items-center bg-gray-100 dark:bg-[#252731] rounded-full p-1 shadow-inner">
-              <button className="px-5 py-2 bg-white dark:bg-[#1E2028] text-black dark:text-white rounded-full shadow-sm text-sm font-semibold">
-                일간
-              </button>
-              <button className="px-5 py-2 text-gray-600 dark:text-gray-400 hover:text-black dark:hover:text-white text-sm">
-                주간
-              </button>
-              <button className="px-5 py-2 text-gray-600 dark:text-gray-400 hover:text-black dark:hover:text-white text-sm">
-                월간
-              </button>
+              {["daily", "weekly", "monthly"].map((range) => (
+                <button
+                  key={range}
+                  onClick={() => onDateRangeChange(range)}
+                  className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${dateRange === range
+                      ? "bg-white dark:bg-[#1E2028] text-black dark:text-white shadow-sm"
+                      : "text-gray-600 dark:text-gray-400 hover:text-black dark:hover:text-white"
+                    }`}
+                >
+                  {range === "daily" ? "일간" : range === "weekly" ? "주간" : "월간"}
+                </button>
+              ))}
             </div>
           </section>
 
@@ -80,13 +170,13 @@ export default function SidePanel() {
             </h3>
             <div className="bg-gray-100 dark:bg-[#252731] rounded-xl p-5 space-y-3 text-[15px] text-gray-800 dark:text-gray-200 font-medium">
               <p className="flex justify-between">
-                <span>총 데이터</span> <span>5,119</span>
+                <span>총 데이터</span> <span>{totalData.toLocaleString()}</span>
               </p>
               <p className="flex justify-between">
-                <span>검색 횟수</span> <span>1</span>
+                <span>검색 횟수</span> <span>{searchCount}</span>
               </p>
               <p className="flex justify-between">
-                <span>활성 필터</span> <span>0</span>
+                <span>활성 필터</span> <span>{activeFilters}</span>
               </p>
             </div>
           </section>
@@ -99,13 +189,22 @@ export default function SidePanel() {
               📤 내보내기
             </h3>
             <div className="flex flex-col gap-3 text-[15px] font-medium">
-              <button className="flex items-center gap-2 px-5 py-3 bg-white dark:bg-[#252731] text-gray-900 dark:text-gray-100 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-[#2C2F3A] transition-all duration-200">
+              <button
+                onClick={handleImageExport}
+                className="flex items-center gap-2 px-5 py-3 bg-white dark:bg-[#252731] text-gray-900 dark:text-gray-100 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-[#2C2F3A] transition-all duration-200"
+              >
                 <FiImage /> 차트 이미지 저장
               </button>
-              <button className="flex items-center gap-2 px-5 py-3 bg-white dark:bg-[#252731] text-gray-900 dark:text-gray-100 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-[#2C2F3A] transition-all duration-200">
+              <button
+                onClick={handlePdfExport}
+                className="flex items-center gap-2 px-5 py-3 bg-white dark:bg-[#252731] text-gray-900 dark:text-gray-100 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-[#2C2F3A] transition-all duration-200"
+              >
                 <FiFileText /> 결과 PDF 다운로드
               </button>
-              <button className="flex items-center gap-2 px-5 py-3 bg-white dark:bg-[#252731] text-gray-900 dark:text-gray-100 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-[#2C2F3A] transition-all duration-200">
+              <button
+                onClick={handleCsvExport}
+                className="flex items-center gap-2 px-5 py-3 bg-white dark:bg-[#252731] text-gray-900 dark:text-gray-100 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-[#2C2F3A] transition-all duration-200"
+              >
                 <FiDownloadCloud /> CSV 내보내기
               </button>
             </div>
@@ -119,9 +218,13 @@ export default function SidePanel() {
               🕓 최근 검색
             </h3>
             <div className="bg-gray-100 dark:bg-[#252731] rounded-xl p-5 space-y-3 text-[15px] text-gray-700 dark:text-gray-300">
-              <p>· 30대 남성 소비 데이터</p>
-              <p>· AI 서비스 이용률</p>
-              <p>· 지역별 소비 변화</p>
+              {recentSearches.length === 0 ? (
+                <p className="text-gray-400 text-sm">최근 검색 기록이 없습니다.</p>
+              ) : (
+                recentSearches.map((term, idx) => (
+                  <p key={idx} className="truncate">· {term}</p>
+                ))
+              )}
             </div>
           </section>
         </>
