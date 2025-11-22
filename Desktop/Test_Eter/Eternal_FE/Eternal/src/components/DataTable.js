@@ -95,9 +95,6 @@ export default function DataTable({ query, data }) {
         <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
            데이터 테이블
         </h3>
-        <span className="text-sm text-gray-500 dark:text-gray-400">
-          총 {filteredData.length}개 항목
-        </span>
       </div>
 
       {/* 검색창 */}

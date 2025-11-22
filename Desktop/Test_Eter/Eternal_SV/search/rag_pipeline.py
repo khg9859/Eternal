@@ -186,7 +186,7 @@ def search_similar_questions(conn, query_vector, top_k=TOP_K_QUESTIONS):
     return [row[0] for row in results]
 
 # --- Step 3: 답변 통계 조회 (최적화된 쿼리) ---
-def get_answer_statistics(conn, codebook_ids, query_vector, respondent_filter=None, limit=500):
+def get_answer_statistics(conn, codebook_ids, query_vector, respondent_filter=None):
     """
     선정된 질문에 답변한 사람들의 통계 정보 반환 (쿼리 최적화)
     
@@ -218,10 +218,9 @@ def get_answer_statistics(conn, codebook_ids, query_vector, respondent_filter=No
             JOIN codebooks c ON a.question_id = c.codebook_id
             WHERE a.question_id = ANY(%s)
               AND a.mb_sn = ANY(%s)
-            ORDER BY distance
-            LIMIT %s;
+            ORDER BY distance;
         """
-        params = (vector_list, codebook_ids, respondent_filter, limit)
+        params = (vector_list, codebook_ids, respondent_filter)
     else:
         # metadata 필터 없이 벡터 유사도만
         query = f"""
@@ -239,10 +238,9 @@ def get_answer_statistics(conn, codebook_ids, query_vector, respondent_filter=No
             FROM answers a
             JOIN codebooks c ON a.question_id = c.codebook_id
             WHERE a.question_id = ANY(%s)
-            ORDER BY distance
-            LIMIT %s;
+            ORDER BY distance;
         """
-        params = (vector_list, codebook_ids, limit)
+        params = (vector_list, codebook_ids)
     
     cur.execute(query, params)
     results = cur.fetchall()
@@ -385,7 +383,7 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
         
         # Step 4: 답변 통계 조회 (최적화된 쿼리)
         # 벡터 유사도로 먼저 좁힌 후 metadata 필터 적용
-        result = get_answer_statistics(conn, similar_question_ids, query_vector, respondent_ids, limit=500)
+        result = get_answer_statistics(conn, similar_question_ids, query_vector, respondent_ids)
         
                 # Step 5: 응답자들의 나이대 분포 조회
         unique_respondents = list(set([answer['respondent_id'] for answer in result['answer_data']]))
@@ -446,31 +444,14 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
             region_rows = cur.fetchall()
             cur.close()
 
-            # 🔹 상위 행정구역(공백 없는 단일 이름)은 제외
-            #    예) '경기', '서울', '부산광역시', '제주특별자치도' 등
-            def _is_top_level_region(name: str) -> bool:
-                return " " not in name.strip()
-
-            filtered_region_rows = [
-                (region, count)
-                for region, count in region_rows
-                if not _is_top_level_region(region)
-            ]
-
-            # 만약 전부 제거돼서 아무 것도 안 남으면(예외 케이스),
-            # 차트가 완전히 비는 걸 방지하기 위해 원본을 그대로 사용
-            if not filtered_region_rows:
-                filtered_region_rows = region_rows
-
-            total_region = sum(count for _, count in filtered_region_rows) if filtered_region_rows else 0
+            total_region = sum(row[1] for row in region_rows) if region_rows else 0
 
             region_distribution = {}
             region_distribution_percent = {}
 
-            for region, count in filtered_region_rows:
+            for region, count in region_rows:
                 region_distribution[region] = count
                 if total_region > 0:
-                    # 소수점 2자리까지 퍼센트
                     pct = round(count / total_region * 100, 2)
                 else:
                     pct = 0.0
@@ -481,7 +462,7 @@ def rag_search_pipeline(user_query, top_k=TOP_K_QUESTIONS, use_gpt_parsing=True)
 
             # 🔍 디버그 출력 (퍼센트 + 인원수 함께)
             print("\n[Step 6] 지역별 응답률 비중 (%):")
-            for region, count in filtered_region_rows:
+            for region, count in region_rows:
                 pct = region_distribution_percent.get(region, 0.0)
                 print(f"  - {region}: {pct}% ({count}명)")
         else:
