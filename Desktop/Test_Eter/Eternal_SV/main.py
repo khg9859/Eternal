@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 # .env 파일 로드
 load_dotenv()
 
-from LLMlangchan import hybrid_answer
+from LLMlangchan import hybrid_answer, chat_with_state
 from search.rag_pipeline import rag_search_pipeline
 
 # ai_summary import 시도
@@ -52,6 +52,10 @@ DB_CONFIG = {
 class RAGRequest(BaseModel):
     query: str
     session_id: Optional[str] = "web_default_session"
+
+class ChatRequest(BaseModel):
+    message: str
+    state: Optional[dict] = None
 # Pydantic 모델들
 class SearchRequest(BaseModel):
     query: str
@@ -247,34 +251,26 @@ async def rag_search(req: RAGRequest):
         print(f"!!! /rag/search ENDPOINT ERROR: {e}")
         raise HTTPException(status_code=500, detail=f"RAG 검색 실패: {str(e)}")
 
-@app.post("/rag/chatbot")
-async def rag_chatbot(req: RAGRequest):
+@app.post("/rag/chat")
+async def rag_chat(req: ChatRequest):
     """
-    AI 데이터 사이언스 챗봇 전용 엔드포인트
-    - LLMlangchan.py의 hybrid_answer를 사용하여 답변 및 통계 생성
+    대화형 AI 챗봇 엔드포인트
+    - message + state 기반으로 chat_with_state() 호출
+    - 후속 질문 처리 + 대화형 말투 생성
     """
     try:
-        # LLMlangchan.py의 hybrid_answer 함수를 사용하여 RAG 파이프라인 실행
-        result = hybrid_answer(req.query)
-        
-        # 프론트엔드 차트 및 답변 표시에 필요한 모든 정보를 포함하여 반환
+        result = chat_with_state(req.message, req.state)
+
         return {
-            "query": req.query,
-            "session_id": req.session_id,
-            "answer": result.get("answer", "답변을 생성할 수 없습니다."),
-            "statistics": result.get("statistics", []),
-            "total_respondents": result.get("total_respondents", 0),
-            "total_answers": result.get("total_answers", 0),
-            "answer_data": result.get("answer_data", []),
-            "demographics": result.get("demographics", {}),
-            "demographics_percent": result.get("demographics_percent", {}),
-            "region_distribution": result.get("region_distribution", {}),
-            "region_distribution_percent": result.get("region_distribution_percent", {}),
-            "unique_respondents_sample": result.get("unique_respondents_sample", [])
+            "answer": result["answer"],        # 대화형으로 가공된 최종 답변
+            "state": result["state"],          # 다음 질문 위해 프론트가 저장할 state
+            "raw_rag_result": result["raw_rag_result"]  # 통계/샘플 데이터
         }
+
     except Exception as e:
-        print(f"!!! /rag/chatbot ENDPOINT ERROR: {e}")
-        raise HTTPException(status_code=500, detail=f"챗봇 응답 생성 실패: {str(e)}")
+        print("[ERROR] /rag/chat 실패:", e)
+        raise HTTPException(status_code=500, detail=f"대화형 챗봇 실패: {str(e)}")
+
 
 @app.post("/rag/charts")
 async def rag_charts(req: RAGRequest):

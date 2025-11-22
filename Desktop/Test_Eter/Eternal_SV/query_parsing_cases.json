@@ -1,0 +1,47 @@
+[
+  {
+    "id": "marriage_01",
+    "query": "결혼 했어?",
+    "expected_filters_contains": [
+      {"column": "marital_status", "operator": "=", "value_contains_any": ["기혼", "혼인"]}
+    ],
+    "expected_semantic_contains": ["결혼", "혼인"],
+    "description": "결혼 여부 질문 테스트"
+  },
+  {
+    "id": "children_01",
+    "query": "자녀가 몇 명이야?",
+    "expected_filters_contains": [
+      {"column": "children_count"}
+    ],
+    "expected_semantic_contains": ["자녀", "아이"],
+    "description": "자녀 수 질문 테스트"
+  },
+  {
+    "id": "job_01",
+    "query": "무슨 일 하세요?",
+    "expected_filters_contains": [
+      {"column": "occupation"}
+    ],
+    "expected_semantic_contains": ["직업", "직무", "하는 일"],
+    "description": "직업 질문 테스트"
+  },
+  {
+    "id": "income_01",
+    "query": "연봉이 얼마야?",
+    "expected_filters_contains": [
+      {"column": "income"}
+    ],
+    "expected_semantic_contains": ["연봉", "소득", "급여", "월급"],
+    "description": "소득 질문 테스트"
+  },
+  {
+    "id": "smoking_01",
+    "query": "담배 펴?",
+    "expected_filters_contains": [
+      {"column": "smoking_status"}
+    ],
+    "expected_semantic_contains": ["흡연", "담배"],
+    "description": "흡연 여부 테스트"
+  }
+]

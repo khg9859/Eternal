@@ -13,13 +13,20 @@ Flow
 3) semantic_query 임베딩 → codebooks.q_vector와 유사도 검색해 question_id 상위 k 선택
 4) answers에서 (question_id ∈ 선택집합) AND (mb_sn ∈ 화이트리스트) 교차 필터
    + a_vector와 semantic_query 임베딩 유사도로 정렬
-5) (선택) gpt-4o-mini로 재랭킹 후, filters/semantic_query/샘플10개를 종합해 서술형 요약 생성
+5) GPT로 통계 + 샘플을 자연어로 요약 (대화체, 존댓말)
+
+이 파일은 "엔진 역할" (DB 연결, 벡터 검색, 통계 수집, 요약 생성)에 집중하고,
+chat_with_state()가 대화형 챗봇 레이어를 제공한다.
 """
 
-import os, json, re
-from typing import List, Dict, Any, Tuple
+import os
+import sys
+import re
+import json
+from typing import List, Dict, Any, Optional
 
 from dotenv import load_dotenv, find_dotenv
+
 load_dotenv(find_dotenv(), override=True)
 
 import psycopg2
@@ -29,414 +36,802 @@ from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 import numpy as np
 
-import sys
+# search 모듈 (Eternal_SV/search) 에 있는 공용 유틸 사용
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.append(CURRENT_DIR)
 
-# search 모듈 경로 추가 (parsing.py, makeSQL.py 재사용)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SEARCH_DIR = os.path.join(BASE_DIR, "search")
-if SEARCH_DIR not in sys.path:
-    sys.path.append(SEARCH_DIR)
-
-from parsing import parse_query_with_gpt
-from makeSQL import build_metadata_where_clause
+from search.parsing import parse_query_with_gpt
+from search.makeSQL import build_metadata_where_clause
 
 # -----------------------
-# ENV
+# 환경 변수 및 상수
 # -----------------------
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_NAME = os.getenv("DB_NAME", "survey")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY missing")
+    print("[WARN] OPENAI_API_KEY가 설정되어 있지 않습니다. GPT 호출 시 오류가 발생할 수 있습니다.")
+
 oai = OpenAI(api_key=OPENAI_API_KEY)
 
-DB = dict(
-    host=os.getenv("DB_HOST"),
-    port=int(os.getenv("DB_PORT", "5432")),
-    dbname=os.getenv("DB_NAME"),
-    user=os.getenv("DB_USER"),
-    password=os.getenv("DB_PASSWORD"),
-)
+# SentenceTransformer 모델 로드 (KURE-v1 encoder)
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "nlpai-lab/KURE-v1")
+print(f"[INFO] Loading embedding model: {EMBEDDING_MODEL_NAME}")
+embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
-# 임베딩 모델 (KURE)
-EMB_MODEL_NAME = os.getenv("EMB_MODEL_NAME", "nlpai-lab/KURE-v1")
-_device = "cuda" if os.getenv("USE_CUDA", "0") == "1" else "cpu"
-_embedder = SentenceTransformer(EMB_MODEL_NAME, device=_device)
-
-# pgvector: cosine 연산자 사용시 '<=>'
+# pgvector 연산자 (코사인 거리: <=>, L2: <->)
 PGVECTOR_OP = "<=>"   # L2면 '<->' 로 교체
 
-# -----------------------
-# 1) 자연어 → (filters, semantic_query)
-# -----------------------
-# ⚠️ 기존 버전에서는 이 파일 내부에 SYSTEM_PROMPT / SCHEMA / parse_query / build_where
-#     함수를 모두 정의해서 사용했지만,
-#     지금은 `search/parsing.py`, `search/makeSQL.py`에 있는 공용 유틸을 재사용합니다.
-#
-# - `parse_query_with_gpt(user_query: str)`:
-#      OpenAI gpt-4o-mini를 사용해서
-#      {"filters": [...], "semantic_query": "..."} 형태의 JSON 딕셔너리를 반환합니다.
-#
-# - `build_metadata_where_clause(filters, table_name="metadata")`:
-#      filters 리스트를 받아서
-#      ("WHERE ...", [params...]) 형태의 튜플을 반환합니다.
-#
-# 이 아래부터는 DB / 임베딩 / 메인 파이프라인 로직만 유지합니다.
+_MULTI_SEP = re.compile(r"[;,/]+")
 
-# -----------------------
-# 3) DB util
-# -----------------------
-def db_conn():
-    return psycopg2.connect(**DB, cursor_factory=RealDictCursor)
 
-# -----------------------
-# 4) 벡터 유틸
-# -----------------------
-def embed(text: str) -> np.ndarray:
+def get_connection():
+    """PostgreSQL 연결 헬퍼"""
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+    )
+    return conn
+
+
+def embed_text(text: str) -> np.ndarray:
+    """문자열을 embedding vector(np.ndarray)로 변환"""
     if not text:
-        text = "general preference"
-    v = _embedder.encode([text], normalize_embeddings=True)[0]  # cosine용 정규화
-    return v.astype(np.float32)
+        text = " "
+    vec = embed_model.encode([text])[0]
+    return np.array(vec, dtype=np.float32)
+
 
 # -----------------------
-# 5) 객관식 번호 → 라벨(보기 텍스트) 변환 유틸
+#  보조 함수들
 # -----------------------
-_MULTI_SEP = re.compile(r"[,\s]+")
 
-def _build_choice_map(codebook_data: dict) -> dict:
+def _normalize_whitespace(s: str) -> str:
+    if s is None:
+        return ""
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _decode_codebook_data(row: Dict[str, Any]) -> Dict[str, Any]:
     """
-    codebooks.codebook_data['answers']의 보기표를 {코드(str): 라벨(str)}로 변환
-    값키: qi_val / q_val / value
-    라벨키: qi_title / label / text / name
+    codebooks.codebook_data가 JSON/JSONB 형태라고 가정.
+    예:
+      {
+        "answers": [
+          {"qi_val": "1", "qi_title": "제철과일(수박, 참외 등)"},
+          ...
+        ],
+        "q_title": "여러분의 여름철 최애 간식은 무엇인가요?",
+        ...
+      }
     """
-    m = {}
-    if not codebook_data:
-        return m
-    items = codebook_data.get("answers") or []
-    for it in items:
+    data = row.get("codebook_data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            return {}
+    elif not isinstance(data, dict):
+        return {}
+    return data or {}
+
+
+def _extract_choices_map(codebook_data: Dict[str, Any]) -> Dict[str, str]:
+    """
+    codebook_data 안에서 객관식 선택지를 찾아 {value -> 라벨} 매핑을 만든다.
+
+    지원 형태:
+    - "choices": [{ "value": "1", "label": "..." }, ...]
+    - "answers": [{ "qi_val": "1", "qi_title": "..." }, ...]   ← 네가 준 구조
+    """
+    choices = codebook_data.get("choices") or codebook_data.get("answers")
+    if not isinstance(choices, list):
+        return {}
+
+    m: Dict[str, str] = {}
+    for it in choices:
         if not isinstance(it, dict):
             continue
-        key = str(it.get("qi_val") or it.get("q_val") or it.get("value") or "").strip()
-        val = (it.get("qi_title") or it.get("label") or it.get("text") or it.get("name") or "").strip()
+        key = str(
+            it.get("qi_val")
+            or it.get("q_val")
+            or it.get("value")
+            or it.get("code")
+            or ""
+        ).strip()
+
+        val = (
+            it.get("qi_title")
+            or it.get("label")
+            or it.get("text")
+            or it.get("name")
+            or ""
+        ).strip()
+
         if key and val:
             m[key] = val
     return m
 
+
 def _translate_answer_value(raw_value: str, choice_map: dict) -> str:
     """
-    "1,2,5" -> "경영/인사/총무/사무, 재무/회계/경리, ..."
-    중복 제거 + 순서 보존
+    "1,2,5" -> "제철과일(수박, 참외 등), 아이스크림, 기타" 처럼
+    qi_val 대신 qi_title/label을 사용하도록 변환.
     """
     if raw_value is None:
         return ""
-    parts = [p for p in _MULTI_SEP.split(str(raw_value).strip()) if p]
-    labels = [choice_map.get(p, p) for p in parts]
-    seen, out = set(), []
-    for x in labels:
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return ", ".join(out)
+    if not choice_map:
+        return str(raw_value)
 
-def _attach_human_readable_labels(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    out = []
-    for r in rows:
-        cmap = _build_choice_map(r.get("codebook_data"))
-        r["answer_value_text"] = _translate_answer_value(
-            r.get("answer_value"), cmap
-        ) if cmap else r.get("answer_value")
-        out.append(r)
-    return out
+    parts = [p for p in _MULTI_SEP.split(str(raw_value)) if p.strip()]
+    seen = set()
+    labels = []
+    for p in parts:
+        key = p.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(choice_map.get(key, key))
+    return ", ".join(labels)
+
 
 # -----------------------
-# 6) 파이프라인
+#  하이브리드 RAG 메인 함수
 # -----------------------
+
 def hybrid_answer(
     user_query: str,
-    k_questions: int = 1,
-    k_answers: int = 500,
-    topn_return: int = 1,
+    k_codebooks: int = 1,              # 관련 질문 상위 1개만 선택 (정확도 ↑)
+    k_answers: Optional[int] = None,   # None이면 LIMIT 없이 전체 사용
+    topn_return: int = 10,
 ) -> Dict[str, Any]:
-    print(f"\n{'=' * 25}\n[ RAG 파이프라인 시작 ]\n- 사용자 질문: \"{user_query}\"\n{'=' * 25}")
+    """
+    하이브리드 RAG 파이프라인
+    - 자연어 질의 → (filters, semantic_query) 파싱
+    - filters로 metadata에서 mb_sn 후보군 필터
+    - semantic_query 임베딩으로 codebooks에서 question_id 후보군 검색
+    - answers에서 (mb_sn ∈ 후보군, question_id ∈ 후보군)을 교차하여 답변 샘플 수집
+    - GPT로 최종 요약(answer) 생성
 
-    # 0단계: 입력 검증 - 인사말이나 의미 없는 입력 필터링
-    print("\n[ 0단계: 입력 검증 ]")
+    k_answers:
+      - int 값이면 answers에서 LIMIT k_answers
+      - None 이면 LIMIT 없이 전체(필터된) answers 사용
+    """
+    print("=" * 70)
+    print(f"[Hybrid RAG] 사용자 질문: {user_query}")
+    print("=" * 70)
 
-    # 간단한 인사말/잡담 패턴
-    casual_patterns = [
-        "안녕",
-        "하이",
-        "헬로",
-        "hi",
-        "hello",
-        "ㅎㅇ",
-        "ㅎㅎ",
-        "뭐해",
-        "심심",
-        "놀아줘",
-        "재밌",
-        "ㅋㅋ",
-        "ㄷㄷ",
-        "에이",
-        "아",
-        "어",
-        "음",
-        "으",
-        "ㅇㅇ",
-    ]
-
-    query_lower = user_query.lower().strip()
-
-    # 너무 짧거나 의미 없는 입력
-    if len(query_lower) < 3:
-        return {
-            "answer": "질문이 너무 짧습니다. 데이터 분석과 관련된 구체적인 질문을 해주세요. 예: '30대 남성의 직업 분포는?'",
-            "filters": [],
-            "semantic_query": "",
-            "question_ids": [],
-            "samples": [],
-        }
-
-    # 인사말이나 잡담 감지
-    if any(pattern in query_lower for pattern in casual_patterns):
-        return {
-            "answer": "안녕하세요! 저는 패널 데이터 분석 AI입니다. 데이터와 관련된 질문을 해주세요.\n\n예시:\n- '30대 남성의 직업 분포는?'\n- '서울에 사는 사람들의 소비 패턴은?'\n- 'SKT 사용자들의 만족도는?'",
-            "filters": [],
-            "semantic_query": "",
-            "question_ids": [],
-            "samples": [],
-        }
-
-    print(f"  - 입력 검증 통과: 데이터 분석 질문으로 판단")
-
-    # 1단계: 자연어 질의 분석 (LLM 호출) — 외부 모듈 사용
-    print("\n[ 1단계: 자연어 질의 분석 ]")
+    # 0) 파싱
     parsed = parse_query_with_gpt(user_query)
-    filters = parsed.get("filters", [])
-    semantic_query = parsed.get("semantic_query", "").strip()
-    print(f"  - 분석 결과 (Filters): {json.dumps(filters, ensure_ascii=False)}")
-    print(f'  - 분석 결과 (Semantic Query): "{semantic_query}"')
+    filters = parsed.get("filters", []) or []
+    semantic_query = parsed.get("semantic_query", "") or ""
 
-    # 2단계: 메타데이터 필터 → mb_sn 화이트리스트
-    print("\n[ 2단계: 메타데이터 필터링 ]")
-    where_sql, params = build_metadata_where_clause(filters, table_name="metadata")
-    with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT mb_sn FROM metadata {where_sql};", params)
-        mb_list = [r["mb_sn"] for r in cur.fetchall()]
-    mb_set = set(mb_list)
-    print(f"  - 실행된 SQL: SELECT mb_sn FROM metadata {where_sql};")
-    print(f"  - SQL 파라미터: {params}")
-    print(f"  - 찾은 응답자 수: {len(mb_set)}명")
-    if len(mb_set) > 0:
-        print(f"  - 찾은 응답자 샘플: {list(mb_set)[:5]}...")
+    print("\n[1단계] 자연어 쿼리 파싱 결과")
+    print("  - Filters:")
+    for f in filters:
+        print(f"    * {f}")
+    print(f"  - Semantic Query: {semantic_query!r}")
 
-    # 3단계: 관련 질문 검색 (codebooks.q_vector 상위 k)
-    print("\n[ 3단계: 관련 질문 검색 ]")
-    q_vec = embed(semantic_query)
-    print(f"  - Semantic Query를 벡터로 변환 완료 (차원: {len(q_vec)})")
-    with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT codebook_id
+    # 1) 의미 검색용 쿼리가 비어있으면 원문 전체 사용
+    if not semantic_query.strip():
+        semantic_query = user_query
+        print("  [주의] semantic_query가 비어 있어 원문 전체를 의미 검색어로 사용합니다.")
+
+    # 2) 의미 쿼리 임베딩
+    print("\n[2단계] 의미 쿼리 임베딩 생성 중...")
+    q_vec = embed_text(semantic_query)
+    print("  - 임베딩 벡터 차원:", q_vec.shape)
+
+    # 3) DB 연결
+    conn = get_connection()
+    conn.autocommit = False
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    try:
+        # 3-1) metadata 필터 + mb_sn 화이트리스트
+        where_sql, where_params = build_metadata_where_clause(filters, table_name="metadata")
+        sql_metadata = f"""
+            SELECT mb_sn
+            FROM metadata
+            {where_sql}
+        """
+        print("\n[3단계] metadata 필터링 SQL:")
+        print("  -", sql_metadata.replace("\n", " "))
+        print("  - params:", where_params)
+
+        cur.execute(sql_metadata, where_params)
+        mb_rows = cur.fetchall()
+        mb_list = [r["mb_sn"] for r in mb_rows if r.get("mb_sn")]
+        mb_set = set(mb_list)
+
+        print(f"  - 필터링된 응답자 수: {len(mb_set)}명")
+
+        # 3-2) codebooks에서 question_id 후보군 검색
+        print("\n[4단계] codebooks에서 질문 후보군 검색 중...")
+        sql_codebooks = f"""
+            SELECT codebook_id AS question_id,
+                   codebook_data,
+                   (q_vector {PGVECTOR_OP} %s::vector) AS distance
             FROM codebooks
             ORDER BY q_vector {PGVECTOR_OP} %s::vector
             LIMIT %s;
-            """,
-            (q_vec.tolist(), k_questions),
-        )
-        qids = [r["codebook_id"] for r in cur.fetchall()]
-    print(f"  - 가장 관련성 높은 질문 ID {len(qids)}개 찾음: {qids}")
+        """
+        params_cb = (q_vec.tolist(), q_vec.tolist(), k_codebooks)
+        cur.execute(sql_codebooks, params_cb)
+        cb_rows = cur.fetchall()
 
-    if not qids:
-        return {
-            "answer": "관련 질문을 찾지 못했습니다.",
-            "filters": filters,
-            "semantic_query": semantic_query,
-            "question_ids": [],
-            "sources": [],
-        }
+        question_ids: List[str] = []
+        codebook_map: Dict[str, Dict[str, Any]] = {}
+        for row in cb_rows:
+            qid = row["question_id"]
+            question_ids.append(qid)
+            codebook_map[qid] = row
 
-    # 4단계: answers 교차 필터 + a_vector 유사도 정렬 (+ codebooks 조인)
-    print("\n[ 4단계: 하이브리드 답변 검색 ]")
-    print(f"  - 검색 조건: 응답자 {len(mb_set)}명, 질문 ID {qids}")
+        print(f"  - 선택된 question_id 후보 {len(question_ids)}개:", question_ids)
 
-    # 쿼리 문을 미리 정의 (유지보수 용이)
-    sql_select_base = f"""
-        SELECT a.answer_id, a.mb_sn, a.question_id, a.answer_value,
-               a.a_vector {PGVECTOR_OP} %s::vector AS distance,
-               c.codebook_data
-        FROM answers a
-        LEFT JOIN codebooks c ON a.question_id = c.codebook_id
-    """
-    sql_order_limit = f"""
-        ORDER BY a.a_vector {PGVECTOR_OP} %s::vector
-        LIMIT %s
-    """
+        if not question_ids:
+            print("  [경고] 의미 검색으로 매칭된 question_id가 없습니다.")
+            return {
+                "answer": "해당 질문과 직접적으로 매칭되는 문항을 찾지 못했습니다.",
+                "filters": filters,
+                "semantic_query": semantic_query,
+                "question_ids": [],
+                "samples": [],
+                "statistics": {
+                    "total_respondents": 0,
+                    "analyzed_respondents": 0,
+                    "total_answers": 0,
+                    "analyzed_answers": 0,
+                    "value_counts": {},
+                },
+            }
 
-    with db_conn() as conn, conn.cursor() as cur:
-        rows = []
+        # 3-3) answers에서 교차 필터링 + 시맨틱 정렬
+        print("\n[5단계] answers에서 교차 필터링 + 시맨틱 정렬")
 
-        # [시도 1] 필터(mb_sn)와 시맨틱(qids) 교집합 검색
-        if mb_set:
-            print("  - [시도 1] 필터(mb_sn) + 시맨틱(qids) 교집합 검색 시도...")
-            sql_strict = f"""
-                {sql_select_base}
-                WHERE a.question_id = ANY(%s) AND a.mb_sn = ANY(%s)
-                {sql_order_limit};
+        sql_select_base = f"""
+            SELECT
+                a.mb_sn,
+                a.question_id,
+                a.answer_value,
+                (a.a_vector {PGVECTOR_OP} %s::vector) AS distance
+            FROM answers a
+        """
+
+        # k_answers 가 None 이면 LIMIT 없이 전체 사용
+        if k_answers is not None:
+            sql_order_clause = f"""
+                ORDER BY a.a_vector {PGVECTOR_OP} %s::vector
+                LIMIT %s
             """
-            params_strict = (
-                q_vec.tolist(),
-                qids,
-                list(mb_set),
-                q_vec.tolist(),
-                k_answers,
-            )
-            cur.execute(sql_strict, params_strict)
-            rows = cur.fetchall()
-            print(f"    -> {len(rows)}건 찾음")
+        else:
+            sql_order_clause = f"""
+                ORDER BY a.a_vector {PGVECTOR_OP} %s::vector
+            """
 
-        # [시도 2] 교집합 결과가 0건이면, 시맨틱(qids)만으로 재검색
-        # (mb_set이 처음부터 없었거나, 시도 1의 결과가 0건일 때 실행)
-        if not rows:
-            if mb_set:  # 시도 1이 실패했을 때만 이 로그를 찍음
-                print(
-                    "  - [시도 2] 교집합 결과 0건. 시맨틱(qids)만으로 재검색합니다."
+        if mb_set:
+            sql_answers = f"""
+                {sql_select_base}
+                WHERE a.mb_sn = ANY(%s)
+                  AND a.question_id = ANY(%s)
+                {sql_order_clause};
+            """
+            if k_answers is not None:
+                params_answers = (
+                    q_vec.tolist(),
+                    list(mb_set),
+                    question_ids,
+                    q_vec.tolist(),
+                    k_answers,
                 )
+            else:
+                params_answers = (q_vec.tolist(), list(mb_set), question_ids, q_vec.tolist())
+
+            print("  - 쿼리 (mb_sn ∩ question_ids 교집합):")
+            print("    ", sql_answers.replace("\n", " "))
+            print("  - params:", "(벡터 생략, mb_sn 개수:", len(mb_set), ", qids:", question_ids, ")")
+            cur.execute(sql_answers, params_answers)
+        else:
+            sql_answers = f"""
+                {sql_select_base}
+                WHERE a.question_id = ANY(%s)
+                {sql_order_clause};
+            """
+            if k_answers is not None:
+                params_answers = (q_vec.tolist(), question_ids, q_vec.tolist(), k_answers)
+            else:
+                params_answers = (q_vec.tolist(), question_ids, q_vec.tolist())
+
+            print("  - 쿼리 (question_ids 시맨틱 정렬만):")
+            print("    ", sql_answers.replace("\n", " "))
+            print("  - params:", "(벡터 생략, qids:", question_ids, ")")
+            cur.execute(sql_answers, params_answers)
+
+        rows = cur.fetchall()
+        print(f"  - 1차 검색 결과 행 수: {len(rows)}")
+
+        # 0건이면 fallback
+        if not rows:
+            if mb_set:
+                print("  - [시도 2] 교집합 결과 0건. 시맨틱(qids)만으로 재검색합니다.")
             else:
                 print("  - [시도 1] 필터(mb_sn) 없음. 시맨틱(qids)만으로 검색합니다.")
 
             sql_loose = f"""
                 {sql_select_base}
                 WHERE a.question_id = ANY(%s)
-                {sql_order_limit};
+                {sql_order_clause};
             """
-            params_loose = (q_vec.tolist(), qids, q_vec.tolist(), k_answers)
+            if k_answers is not None:
+                params_loose = (q_vec.tolist(), question_ids, q_vec.tolist(), k_answers)
+            else:
+                params_loose = (q_vec.tolist(), question_ids, q_vec.tolist())
+
             cur.execute(sql_loose, params_loose)
             rows = cur.fetchall()
-            print(f"    -> {len(rows)}건 찾음")
+            print(f"  - 시도 2 결과 행 수: {len(rows)}")
 
-    print(f"  - 최종 검색된 답변 후보 수: {len(rows)}개")
+        # 3-4) codebook_data를 이용해 answer_value 해석
+        print("\n[6단계] codebook_data를 이용해서 answer_value 해석 중...")
+        final_samples: List[Dict[str, Any]] = []
+        seen_mb_q: set = set()
+        unique_respondents: set = set()
 
-    if not rows:
-        return {
-            "answer": "조건에 맞는 응답을 찾지 못했습니다.",
-            "filters": filters,
-            "semantic_query": semantic_query,
-            "question_ids": qids,
-            "sources": [],
-        }
+        for r in rows:
+            mb_sn = r.get("mb_sn")
+            qid = r.get("question_id")
+            if not mb_sn or not qid:
+                continue
 
-    # 응답자 수 통계 계산
-    unique_respondents = set(r["mb_sn"] for r in rows)
-    print(f"  - 총 {len(unique_respondents)}명의 응답자가 답변함")
+            key = (mb_sn, qid)
+            if key in seen_mb_q:
+                continue
+            seen_mb_q.add(key)
 
-    # 객관식 번호 → 라벨 텍스트 부착
-    rows = _attach_human_readable_labels(rows)
+            unique_respondents.add(mb_sn)
 
-    # 5단계: LLM 재랭킹 건너뛰기 (모든 데이터 사용)
-    print("\n[ 5단계: LLM 재랭킹 건너뛰기 ]")
-    print(
-        f"  - 벡터 유사도 기반으로 이미 정렬된 {len(rows)}개의 답변을 모두 사용합니다."
-    )
-    print(
-        f"  - LLM 재랭킹을 건너뛰고 전체 데이터를 분석에 활용합니다."
-    )
+            raw_val = r.get("answer_value")
+            cb_row = codebook_map.get(qid)
+            if cb_row:
+                cb_data = _decode_codebook_data(cb_row)
+                choice_map = _extract_choices_map(cb_data)
+                translated = _translate_answer_value(str(raw_val), choice_map)
 
-    # 모든 rows를 final로 사용
-    final = rows
+                # 질문 제목: q_title / question_title / title 순으로 탐색
+                question_title = (
+                    cb_data.get("q_title")
+                    or cb_data.get("question_title")
+                    or cb_data.get("title")
+                    or ""
+                )
+            else:
+                translated = str(raw_val)
+                question_title = ""
 
-    # 6단계: 서술형 요약 생성
-    print("\n[ 6단계: LLM 요약 생성 ]")
-    print(f"  - 최종 {len(final)}개 답변을 기반으로 서술형 요약 생성 요청...")
+            final_samples.append(
+                {
+                    "mb_sn": mb_sn,
+                    "question_id": qid,
+                    "question_title": question_title,
+                    "answer_value": raw_val,
+                    "answer_value_text": translated,
+                    "distance": float(r.get("distance") or 0.0),
+                }
+            )
 
-    # 응답 내용 분석 및 통계 계산
-    from collections import Counter
+        print(f"  - 정제된 샘플 수: {len(final_samples)} (중복 제거 후)")
 
-    # 답변 값들을 카운트
-    answer_values = [
-        r.get("answer_value_text") or r.get("answer_value") or "" for r in final
-    ]
-    answer_counter = Counter(answer_values)
+        # 4) 통계 계산 + GPT 요약
+        print("\n[7단계] GPT 요약 생성 요청")
 
-    # 상위 항목 추출
-    top_answers = answer_counter.most_common(10)
+        total_respondents = len(unique_respondents)
+        print(f"  - 전체 응답자 수(이 질의에 대해 실제 응답한 수): {total_respondents}명")
 
-    # 응답 내용 텍스트 (번호/ID 제거, 라벨 사용)
-    final_text = "\n".join(
-        f"- {r.get('answer_value_text') or r.get('answer_value') or ''}"
-        for r in final
-    )
+        top_samples = final_samples[:topn_return]
 
-    # 통계 텍스트 생성
-    stats_text = "\n".join(
-        [
-            f"  • {value}: {count}명 ({count/len(final)*100:.1f}%)"
-            for value, count in top_answers
-        ]
-    )
+        value_counts: Dict[str, int] = {}
+        for s in final_samples:
+            t = s.get("answer_value_text") or s.get("answer_value") or ""
+            t_norm = _normalize_whitespace(str(t))
+            if not t_norm:
+                continue
+            value_counts[t_norm] = value_counts.get(t_norm, 0) + 1
 
-    # 최종 응답자 수 계산
-    final_respondents = set(r["mb_sn"] for r in final)
+        sorted_counts = sorted(value_counts.items(), key=lambda x: x[1], reverse=True)[:10]
 
-    summary_prompt = f"""
-당신은 데이터 분석가입니다. 아래의 조건과 응답 샘플을 참고해 사용자의 질문에 대해
-**구체적인 수치를 포함한 서술형 요약**을 작성하세요.
+        stats_text_lines = [f"- 전체 응답자 수: {total_respondents}명"]
+        for label, cnt in sorted_counts:
+            ratio = (cnt / total_respondents * 100.0) if total_respondents > 0 else 0.0
+            stats_text_lines.append(f"- {label}: {cnt}명 ({ratio:.1f}%)")
+        stats_text = "\n".join(stats_text_lines)
 
-[통계 정보]
-- 총 응답자 수: {len(unique_respondents)}명
-- 분석 대상 응답자: {len(final_respondents)}명
-- 분석 답변 수: {len(final)}개
+        samples_text_lines = []
+        for s in top_samples:
+            mb_sn = s.get("mb_sn")
+            qid = s.get("question_id")
+            qtitle = s.get("question_title")
+            aval = s.get("answer_value_text") or s.get("answer_value")
+            line = f"[mb_sn={mb_sn}] ({qid}) {qtitle} -> {aval}"
+            samples_text_lines.append(line)
+        samples_text = "\n".join(samples_text_lines)
 
-[조건]
-- filters: {json.dumps(filters, ensure_ascii=False)}
-- semantic_query: "{semantic_query}"
+        summary_prompt = f"""
+당신은 패널 데이터 분석 결과를 한국어로 요약하는 데이터 분석 어시스턴트입니다.
 
-[답변 분포 (상위 10개)]
-{stats_text}
+반드시 존댓말(하십시오체 또는 해요체)을 사용하고,
+반말(예: ~해, ~야, ~해줘)은 절대로 사용하지 마십시오.
 
-[지침]
-1) **반드시 구체적인 수치와 비율을 포함**하세요. 예: "의사 15명(30%), 간호사 10명(20%)"
-2) 가장 많은 답변부터 순서대로 언급하세요.
-3) 전체 응답자 수와 비율을 명확히 표시하세요.
-4) "다양한 직업군" 같은 애매한 표현 대신 구체적인 수치를 사용하세요.
-5) 2-3문단으로 작성하되, 첫 문단에는 주요 통계를, 두 번째 문단에는 세부 내용을 포함하세요.
-
-[질문]
+[사용자 질문]
 {user_query}
 
-[응답 샘플]
-{final_text}
+[메타데이터 필터]
+{json.dumps(filters, ensure_ascii=False)}
 
-[출력 형식 예시]
-"분석 결과, 총 30명의 응답자 중 의사가 15명(50%)으로 가장 많았으며, 간호사 8명(26.7%), 엔지니어 4명(13.3%) 순으로 나타났습니다. 
-이 외에도 변호사 2명(6.7%), 회계사 1명(3.3%) 등이 있었습니다."
+[의미 검색용 쿼리]
+{semantic_query}
+
+[1차 통계 요약]
+{stats_text}
+
+[대표 응답 샘플 상위 {len(top_samples)}개]
+{samples_text}
+
+위 정보를 바탕으로, 사용자의 질문에 대해
+1) 한두 문장으로 '결론'을 먼저 말씀해 주세요.
+2) 그 다음 문단에서 주요 직무/선호/경향 등을 설명해 주세요.
+3) 숫자와 비율이 중요한 경우, 가능한 범위에서 구체적인 수치를 언급해 주세요.
+4) 너무 딱딱한 보고서 느낌보다는, 이해하기 쉬운 자연스러운 설명으로 작성해 주세요.
+5) 모든 문장은 존댓말로 끝나도록 해 주세요.
 """
-    try:
-        summ = oai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": summary_prompt}],
-            temperature=0.2,
-        )
-        answer = summ.choices[0].message.content
-        print("  - 서술형 요약 생성 완료.")
-    except Exception as e:
-        print(f"  - 요약 생성 실패: {e}")
-        answer = "요약 생성 중 오류가 발생했지만, 관련 응답 샘플을 반환합니다."
+        gpt_messages = [
+            {
+                "role": "system",
+                "content": "당신은 한국어로 패널 데이터를 요약해주는 분석 어시스턴트입니다. 항상 존댓말을 사용하십시오.",
+            },
+            {
+                "role": "user",
+                "content": summary_prompt,
+            },
+        ]
 
-    return {
-        "answer": answer,
-        "filters": filters,
-        "semantic_query": semantic_query,
-        "question_ids": qids,
-        "samples": final[:topn_return],  # 4단계 결과를 상위 N개 슬라이싱
-        "statistics": {
-            "total_respondents": len(unique_respondents),
-            "analyzed_respondents": len(final_respondents),
-            "total_answers": len(rows),
-            "analyzed_answers": len(final),
-        },
+        gpt_resp = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=gpt_messages,
+            temperature=0.4,
+        )
+        answer_text = gpt_resp.choices[0].message.content
+        print("  - GPT 요약 생성 완료")
+
+        return {
+            "answer": answer_text,
+            "filters": filters,
+            "semantic_query": semantic_query,
+            "question_ids": question_ids,
+            "samples": top_samples,
+            "statistics": {
+                "total_respondents": total_respondents,
+                "analyzed_respondents": len(unique_respondents),
+                "total_answers": len(rows),
+                "analyzed_answers": len(final_samples),
+                "value_counts": value_counts,
+            },
+        }
+
+    except Exception as e:
+        print("[ERROR] hybrid_answer 실행 중 오류:", repr(e))
+        return {
+            "answer": "질문을 분석하는 과정에서 오류가 발생했습니다.",
+            "filters": filters,
+            "semantic_query": semantic_query,
+            "question_ids": [],
+            "samples": [],
+            "statistics": {
+                "total_respondents": 0,
+                "analyzed_respondents": 0,
+                "total_answers": 0,
+                "analyzed_answers": 0,
+                "value_counts": {},
+            },
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
+# =======================
+#  스몰토크 / 대화형 유틸
+# =======================
+
+def is_smalltalk(message: str) -> bool:
+    """
+    인사/잡담을 대략 판별.
+    ⚠️ '결혼', '자녀', '직업', '연봉', '흡연' 같은 도메인 키워드가 있으면
+       무조건 데이터 질문으로 간주해서 False를 반환한다.
+    """
+    if not message:
+        return False
+
+    text = message.strip()
+    lower = text.lower()
+
+    # 1) 패널 설문 도메인 키워드: 이게 하나라도 있으면 절대 스몰토크 아님
+    domain_keywords = [
+        # 결혼/혼인
+        "결혼", "혼인", "기혼", "미혼", "이혼",
+        # 자녀/가족
+        "자녀", "아이", "애기", "자식", "아들", "딸", "몇 명이야", "몇명이야",
+        # 직업/일
+        "직업", "무슨 일 하", "어떤 일 하", "직장", "직군", "직무", "하는 일",
+        # 소득/연봉
+        "연봉", "소득", "급여", "월급", "수입",
+        # 흡연/음주
+        "담배", "흡연", "피우세요", "펴?", "피세요", "술", "음주",
+    ]
+    if any(kw in text for kw in domain_keywords):
+        return False
+
+    # 2) 숫자나 '몇', '퍼센트' 같은 분석 키워드가 있으면 역시 데이터 질문
+    if re.search(r"\d", text):
+        return False
+    analysis_keywords = [
+        "몇", "퍼센트", "%", "비율", "통계",
+        "이용", "사용", "OTT", "나이", "연령", "지역",
+        "직무", "직군",
+    ]
+    if any(kw in text for kw in analysis_keywords):
+        return False
+
+    # 3) 전형적인 인사/잡담 패턴만 스몰토크로 취급
+    greetings = [
+        "안녕", "안녕하세요", "하이", "ㅎㅇ", "헬로", "hello", "hi",
+        "잘 지냈", "잘 지내", "오랜만", "요즘 어때",
+        "뭐해", "머해", "뭐 하고 있어",
+        "고마워", "감사", "수고했어", "수고하셨",
+    ]
+    if any(kw in text for kw in greetings) or any(kw in lower for kw in ["hi", "hello"]):
+        return True
+
+    # 4) 아주 짧은 한두 단어이긴 해도, 도메인 키워드가 섞여있으면 데이터 질문
+    if len(text) <= 5:
+        if any(kw in text for kw in domain_keywords):
+            return False
+        return True
+
+    return False
+
+
+def smalltalk_chat(message: str, history: List[Dict[str, str]]) -> str:
+    system_prompt = """
+너는 패널 데이터를 분석해주는 AI이지만,
+지금은 데이터 이야기 말고 가벼운 인사/잡담만 해주는 모드입니다.
+
+- 사용자가 '안녕', '뭐해', '잘 지냈어?'처럼 말하면,
+  편하게 인사하고, "데이터에 대해 궁금한 점이 있으시면 언제든지 물어봐 달라" 정도를 존댓말로 덧붙여 주세요.
+- 반말(예: ~해, ~야, ~해줘)은 절대로 사용하지 마십시오.
+- 항상 존댓말(해요체 또는 하십시오체)로 대답해 주세요.
+""".strip()
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for h in history[-6:]:
+        if isinstance(h, dict) and "role" in h and "content" in h:
+            messages.append(h)
+    messages.append({"role": "user", "content": message})
+
+    resp = oai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        temperature=0.6,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
+def rewrite_with_context(user_utterance: str, state: Dict[str, Any]) -> str:
+    last_query = state.get("last_user_query", "") or ""
+    last_filters = state.get("last_filters", []) or []
+
+    if isinstance(last_filters, dict):
+        lf_iter = [last_filters]
+    else:
+        lf_iter = last_filters
+
+    filters_text = "\n".join(
+        f"- {f.get('column')} {f.get('operator')} {f.get('value')}"
+        for f in lf_iter
+        if isinstance(f, dict)
+    ) or "(이전 필터 없음)"
+
+    system_prompt = """너는 한국어로 사용자 질문을 다시 써주는 어시스턴트입니다.
+
+- 이전 질문과 필터 조건을 참고해서, 이번 사용자의 발화를
+  '완전히 독립적인 하나의 질문'으로 다시 써 주세요.
+- '그럼 40대는?', '그럼 여성은?'처럼 축약된 표현이 오면,
+  이전 질문의 맥락(지역, 성별, 나이, 주제 등)을 활용해서
+  빠진 정보를 채워 넣어야 합니다.
+- 출력은 오직 '다시 쓴 질문 문장' 한 줄만 반환해야 합니다.
+- 설명, 따옴표, 접두사는 절대로 붙이지 마세요.
+""".strip()
+
+    user_prompt = f"""[이전 질문]
+{last_query}
+
+[이전 필터 조건]
+{filters_text}
+
+[이번 사용자 발화]
+{user_utterance}
+
+위 정보를 바탕으로, 이번 발화를 완전히 self-contained한 질문으로
+한 문장으로 다시 써 주세요.
+""".strip()
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        resp = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.3,
+        )
+        rewritten = (resp.choices[0].message.content or "").strip()
+        print(f"[rewrite_with_context] '{user_utterance}' -> '{rewritten}'")
+        return rewritten or user_utterance
+    except Exception as e:
+        print(f"[rewrite_with_context] 오류: {e!r}")
+        return user_utterance
+
+
+def make_chatty_answer(
+    resolved_query: str,
+    rag_result: Dict[str, Any],
+    history: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    history = history or []
+
+    stats = rag_result.get("statistics", {}) or {}
+    samples = rag_result.get("samples", []) or []
+
+    sample_lines: List[str] = []
+    for r in samples[:5]:
+        if not isinstance(r, dict):
+            continue
+        v = r.get("answer_value_text") or r.get("answer_value")
+        if v:
+            sample_lines.append(f"- {v}")
+    sample_text = "\n".join(sample_lines) or "(대표 응답 샘플 없음)"
+
+    system_prompt = """너는 패널 데이터를 설명해주는 한국어 챗봇입니다.
+
+- 말투는 항상 존댓말(해요체 또는 하십시오체)을 사용해야 합니다.
+- 반말(예: ~해, ~야, ~해줘)은 절대로 사용하지 마십시오.
+- 첫 문장은 결론 위주로 짧게 말씀해 주세요.
+- 그 다음에 주요 수치(몇 명, 몇 %)와 특징을 간단히 정리해 주세요.
+- 2~3문단 이내로 정리하되, 필요하면 bullet을 사용할 수 있습니다.
+- 마지막에는 "추가로 궁금한 점이 있으시면 더 물어보셔도 됩니다 :)" 정도의 한 줄을 덧붙여 주세요.
+""".strip()
+
+    user_content = f"""[사용자 질문]
+{resolved_query}
+
+[통계 요약]
+{json.dumps(stats, ensure_ascii=False)}
+
+[대표 응답 샘플 일부]
+{sample_text}
+""".strip()
+
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    for h in (history[-6:] if history else []):
+        if isinstance(h, dict) and "role" in h and "content" in h:
+            messages.append(h)
+    messages.append({"role": "user", "content": user_content})
+
+    try:
+        resp = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.5,
+        )
+        answer = (resp.choices[0].message.content or "").strip()
+        print("[make_chatty_answer] 대화형 응답 생성 완료.")
+        return answer
+    except Exception as e:
+        print(f"[make_chatty_answer] 오류: {e!r}")
+        return rag_result.get("answer", "응답을 생성하는 과정에서 오류가 발생했습니다.")
+
+
+def chat_with_state(
+    message: str,
+    state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    상위 레벨 챗봇 진입점.
+
+    - smalltalk(인사/잡담)은 RAG를 타지 않고 smalltalk_chat으로만 처리
+    - 그 외 질의는 hybrid_answer(..., k_answers=None)로 전체 데이터 기준 분석
+    - 후속 질문은 rewrite_with_context로 맥락 재구성
+    """
+    state = state or {}
+    history: List[Dict[str, str]] = state.get("history", []) or []
+
+    # 0) 인사/잡담 먼저 처리
+    if is_smalltalk(message):
+        chatty_answer = smalltalk_chat(message, history)
+
+        new_history = history + [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": chatty_answer},
+        ]
+        new_history = new_history[-10:]
+
+        new_state: Dict[str, Any] = {
+            "last_user_query": state.get("last_user_query", ""),
+            "last_filters": state.get("last_filters", []),
+            "last_question_ids": state.get("last_question_ids", []),
+            "history": new_history,
+        }
+
+        return {
+            "answer": chatty_answer,
+            "state": new_state,
+            "raw_rag_result": None,
+        }
+
+    # 1) 이전 filters가 있으면 "후속 질문"으로 보고, 맥락 기반 재작성 시도
+    if state.get("last_filters"):
+        resolved_query = rewrite_with_context(message, state)
+    else:
+        resolved_query = message
+
+    # 2) RAG/통계 결과 얻기 (LIMIT 해제)
+    rag_result = hybrid_answer(resolved_query, k_answers=None)
+
+    # 3) 통계 결과를 바탕으로 대화형 답변 생성
+    chatty_answer = make_chatty_answer(
+        resolved_query=resolved_query,
+        rag_result=rag_result,
+        history=history,
+    )
+
+    # 4) 다음 턴을 위한 state 업데이트
+    new_history = history + [
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": chatty_answer},
+    ]
+    new_history = new_history[-10:]
+
+    new_state: Dict[str, Any] = {
+        "last_user_query": resolved_query,
+        "last_filters": rag_result.get("filters", []),
+        "last_question_ids": rag_result.get("question_ids", []),
+        "history": new_history,
     }
 
-# quick manual test
+    return {
+        "answer": chatty_answer,
+        "state": new_state,
+        "raw_rag_result": rag_result,
+    }
+
+
 if __name__ == "__main__":
-    q = "서울 사는 30대 남성이 이용하는 OTT 서비스는 몇 개?"
-    res = hybrid_answer(q)
-    print(json.dumps(res, ensure_ascii=False, indent=2))
+    state = None
+    while True:
+        q = input("질문> ").strip()
+        if q in ("exit", "quit"):
+            break
+        res = chat_with_state(q, state)
+        print("봇:", res["answer"])
+        state = res["state"]
+
+
