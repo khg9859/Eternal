@@ -466,7 +466,7 @@ def hybrid_answer(
         summary_prompt = f"""
 당신은 패널 데이터 분석 결과를 한국어로 요약하는 데이터 분석 어시스턴트입니다.
 
-반드시 존댓말(하십시오체 또는 해요체)을 사용하고,
+반드시 존댓말(십시오체 또는 해요체)을 사용하고,
 반말(예: ~해, ~야, ~해줘)은 절대로 사용하지 마십시오.
 
 [사용자 질문]
@@ -634,8 +634,13 @@ def smalltalk_chat(message: str, history: List[Dict[str, str]]) -> str:
 
 
 def rewrite_with_context(user_utterance: str, state: Dict[str, Any]) -> str:
+    """
+    직전 질문/필터/semantic_query 컨텍스트를 기반으로,
+    축약된 후속 질문을 '완전히 독립적인 하나의 질문'으로 다시 써주는 함수.
+    """
     last_query = state.get("last_user_query", "") or ""
     last_filters = state.get("last_filters", []) or []
+    last_semantic = state.get("last_semantic_query", "") or ""
 
     if isinstance(last_filters, dict):
         lf_iter = [last_filters]
@@ -650,11 +655,19 @@ def rewrite_with_context(user_utterance: str, state: Dict[str, Any]) -> str:
 
     system_prompt = """너는 한국어로 사용자 질문을 다시 써주는 어시스턴트입니다.
 
-- 이전 질문과 필터 조건을 참고해서, 이번 사용자의 발화를
-  '완전히 독립적인 하나의 질문'으로 다시 써 주세요.
-- '그럼 40대는?', '그럼 여성은?'처럼 축약된 표현이 오면,
-  이전 질문의 맥락(지역, 성별, 나이, 주제 등)을 활용해서
-  빠진 정보를 채워 넣어야 합니다.
+규칙:
+- 이전 질문과 필터 조건, 그리고 '이전 분석 주제'를 참고해서
+  이번 사용자의 발화를 '완전히 독립적인 하나의 질문'으로 다시 써 주세요.
+- 사용자가 맥락만 바꾸는 말(예: '그럼 30대 남성은?', '그럼 여성은?', '서울 사는 사람은?')을 하면,
+  이전 질문의 '분석 주제'(예: 결혼 여부, 자녀 수, 직업, OTT 이용 서비스 등)를 절대로 바꾸지 말고
+  인구통계 조건(지역, 성별, 나이 등)만 바꿔서 한 문장으로 완성해야 합니다.
+- 예시)
+  이전 질문: '결혼 여부 알려줘'
+  이번 발화: '30대 남성은?'
+  → 다시 쓴 질문: '30대 남성의 결혼 여부는 어떻게 되나요?'
+- 위와 같은 상황에서 직업 분포나 다른 완전히 새로운 주제로 바꾸면 안 됩니다.
+- 만약 이번 발화가 완전히 다른 주제의 새 질문으로 보이면,
+  이전 질문과 필터는 무시하고 이번 발화만으로 self-contained한 질문을 만들어 주세요.
 - 출력은 오직 '다시 쓴 질문 문장' 한 줄만 반환해야 합니다.
 - 설명, 따옴표, 접두사는 절대로 붙이지 마세요.
 """.strip()
@@ -664,6 +677,9 @@ def rewrite_with_context(user_utterance: str, state: Dict[str, Any]) -> str:
 
 [이전 필터 조건]
 {filters_text}
+
+[이전 분석 주제 요약 (semantic_query)]
+{last_semantic}
 
 [이번 사용자 발화]
 {user_utterance}
@@ -696,11 +712,17 @@ def make_chatty_answer(
     rag_result: Dict[str, Any],
     history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
+    """
+    hybrid_answer의 결과(rag_result)를 받아
+    통계 + 샘플을 기반으로 '짧은 대화형' 설명을 생성한다.
+    - 한 문단, 2~3문장 정도로만 요약
+    """
     history = history or []
 
     stats = rag_result.get("statistics", {}) or {}
     samples = rag_result.get("samples", []) or []
 
+    # 대표 샘플 텍스트 (혹시 GPT가 참고하고 싶을 때를 위해)
     sample_lines: List[str] = []
     for r in samples[:5]:
         if not isinstance(r, dict):
@@ -712,12 +734,14 @@ def make_chatty_answer(
 
     system_prompt = """너는 패널 데이터를 설명해주는 한국어 챗봇입니다.
 
-- 말투는 항상 존댓말(해요체 또는 하십시오체)을 사용해야 합니다.
+- 반드시 존댓말(해요체 또는 하십시오체)을 사용해야 합니다.
 - 반말(예: ~해, ~야, ~해줘)은 절대로 사용하지 마십시오.
-- 첫 문장은 결론 위주로 짧게 말씀해 주세요.
-- 그 다음에 주요 수치(몇 명, 몇 %)와 특징을 간단히 정리해 주세요.
-- 2~3문단 이내로 정리하되, 필요하면 bullet을 사용할 수 있습니다.
-- 마지막에는 "추가로 궁금한 점이 있으시면 더 물어보셔도 됩니다 :)" 정도의 한 줄을 덧붙여 주세요.
+- 답변은 한 문단만 사용하고, 줄바꿈(엔터)을 넣지 마십시오.
+- 전체 길이는 2~3문장, 대략 2~3줄 이내로만 요약해 주세요.
+- 첫 문장에는 핵심 결론(가장 많이 선택된 항목과 그 비율)을 간단히 말씀해 주세요.
+- 두 번째 문장에는 주요 2~3개 선택지와 인원/비율만 간단히 덧붙여 주세요.
+- 필요하다면 마지막에 "추가로 궁금한 점이 있으시면 더 물어보셔도 됩니다 :)" 한 문장을 짧게 덧붙일 수 있지만, 전체가 너무 길어지지 않도록 해 주세요.
+- 불필요한 반복 설명이나 배경 설명은 최대한 줄여 주세요.
 """.strip()
 
     user_content = f"""[사용자 질문]
@@ -740,14 +764,18 @@ def make_chatty_answer(
         resp = oai.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            temperature=0.5,
+            temperature=0.3,  # 요약은 조금 더 보수적으로
         )
         answer = (resp.choices[0].message.content or "").strip()
-        print("[make_chatty_answer] 대화형 응답 생성 완료.")
+        print("[make_chatty_answer] 짧은 대화형 응답 생성 완료.")
         return answer
     except Exception as e:
         print(f"[make_chatty_answer] 오류: {e!r}")
-        return rag_result.get("answer", "응답을 생성하는 과정에서 오류가 발생했습니다.")
+        return rag_result.get(
+            "answer",
+            "요약을 생성하는 과정에서 오류가 발생했습니다.",
+        )
+
 
 
 def chat_with_state(
@@ -778,6 +806,7 @@ def chat_with_state(
             "last_user_query": state.get("last_user_query", ""),
             "last_filters": state.get("last_filters", []),
             "last_question_ids": state.get("last_question_ids", []),
+            "last_semantic_query": state.get("last_semantic_query", ""),
             "history": new_history,
         }
 
@@ -787,8 +816,8 @@ def chat_with_state(
             "raw_rag_result": None,
         }
 
-    # 1) 이전 filters가 있으면 "후속 질문"으로 보고, 맥락 기반 재작성 시도
-    if state.get("last_filters"):
+    # 1) 이전 질문이 있으면 "후속 질문"으로 보고, 맥락 기반 재작성 시도
+    if state.get("last_user_query"):
         resolved_query = rewrite_with_context(message, state)
     else:
         resolved_query = message
@@ -814,6 +843,7 @@ def chat_with_state(
         "last_user_query": resolved_query,
         "last_filters": rag_result.get("filters", []),
         "last_question_ids": rag_result.get("question_ids", []),
+        "last_semantic_query": rag_result.get("semantic_query", ""),
         "history": new_history,
     }
 
