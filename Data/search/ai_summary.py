@@ -18,7 +18,7 @@ if not API_KEY:
     raise EnvironmentError("OPENAI_API_KEY가 .env 파일에 설정되지 않았습니다.")
 
 try:
-    # (참고: gpt-5.1은 현재 사용 불가능하므로, gpt-4o를 사용합니다)
+    
     client = OpenAI(api_key=API_KEY)
 except Exception as e:
     print(f"XXX [오류] OpenAI 클라이언트 초기화 실패: {e}")

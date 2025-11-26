@@ -77,40 +77,25 @@ def build_metadata_where_clause(filters_list, table_name="metadata"):
 if __name__ == '__main__':
     # RAG 쿼리 파서(parsing.py)로부터 전달받았다고 가정한 입력값
     query_input = {
-      "filters": [
-        {
-          "column": "region",
-          "operator": "LIKE",
-          "value": "서울%"
-        },
-        {
-          "column": "region",
-          "operator": "LIKE",
-          "value": "경기도%"
-        },
-        {
-          "column": "age",
-          "operator": ">=",
-          "value": "40"
-        },
-        {
-          "column": "age",
-          "operator": "<",
-          "value": "50"
-        },
-        {
-          "column": "gender",
-          "operator": "=",
-          "value": "여성"
-        },
-        {
-          "column": "mobile_carrier",
-          "operator": "=",
-          "value": "LG"
-        }
-      ],
-      "semantic_query": "문화생활 만족도"
+  "filters": [
+    {
+      "column": "region",
+      "operator": "LIKE",
+      "value": "서울%"
+    },
+    {
+      "column": "gender",
+      "operator": "=",
+      "value": "남성"
+    },
+    {
+      "column": "gender",
+      "operator": "=",
+      "value": "여성"
     }
+  ],
+  "semantic_query": "운동을 좋아하는"
+}
 
     # 함수 실행
     where_sql, params = build_metadata_where_clause(query_input['filters'])
