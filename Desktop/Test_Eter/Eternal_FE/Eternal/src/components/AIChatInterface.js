@@ -78,7 +78,7 @@ const AIChatInterface = ({ onExit }) => {
 
     try {
       // ✅ Eternal_SV 백엔드의 대화형 챗봇 엔드포인트 호출
-      const response = await fetch("http://54.252.198.188:8000/rag/chat", {
+      const response = await fetch("/rag/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

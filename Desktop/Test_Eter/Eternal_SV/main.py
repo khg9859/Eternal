@@ -35,7 +35,7 @@ app = FastAPI(title="Eternel API", description="자연어 질의 기반 패널 �
 # CORS 설정 (프론트엔드와 연결을 위해)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React 개발 서버
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

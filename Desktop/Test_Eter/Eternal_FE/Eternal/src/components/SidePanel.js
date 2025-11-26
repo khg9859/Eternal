@@ -137,30 +137,6 @@ export default function SidePanel({ query, data, dateRange, onDateRangeChange })
             </p>
             <div className="w-20 h-[3px] bg-gradient-to-r from-blue-400 to-indigo-500 dark:from-blue-600 dark:to-indigo-400 rounded-full mt-3"></div>
           </div>
-
-          {/* =======================
-              🔸 조회 기간 선택
-              ======================= */}
-          <section className="mb-10">
-            <h3 className="text-base font-bold text-gray-800 dark:text-gray-200 mb-3">
-              📅 조회 기간
-            </h3>
-            <div className="flex items-center bg-gray-100 dark:bg-[#252731] rounded-full p-1 shadow-inner">
-              {["daily", "weekly", "monthly"].map((range) => (
-                <button
-                  key={range}
-                  onClick={() => onDateRangeChange(range)}
-                  className={`px-5 py-2 rounded-full text-sm font-semibold transition-all ${dateRange === range
-                      ? "bg-white dark:bg-[#1E2028] text-black dark:text-white shadow-sm"
-                      : "text-gray-600 dark:text-gray-400 hover:text-black dark:hover:text-white"
-                    }`}
-                >
-                  {range === "daily" ? "일간" : range === "weekly" ? "주간" : "월간"}
-                </button>
-              ))}
-            </div>
-          </section>
-
           {/* =======================
               🔸 데이터 통계
               ======================= */}
@@ -174,9 +150,6 @@ export default function SidePanel({ query, data, dateRange, onDateRangeChange })
               </p>
               <p className="flex justify-between">
                 <span>검색 횟수</span> <span>{searchCount}</span>
-              </p>
-              <p className="flex justify-between">
-                <span>활성 필터</span> <span>{activeFilters}</span>
               </p>
             </div>
           </section>
