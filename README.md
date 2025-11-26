@@ -190,3 +190,6 @@ build_metadata_where_clause(filters_list, table_name="metadata")
 이후 OpenAI의 gpt 모델(개인 설정)에 따라 제공한 AI 요약 기능 제공
 
 ```
+
+
+## 6, 7, 8은 백엔드에 코드로서 내장되어있음
