@@ -45,14 +45,14 @@ INPUT_FOLDER = os.getenv('INPUT_PATH')
 
 #### 🧩 Qpoll 계열
 
-- 데이터 경로: ./Data/db_insert/panelData/
+- .env를 수정하여 INPUT_PATH에 Qpoll 계열 데이터 넣어두기.
 
 #### 🧩 Welcome 1st / 2nd 계열
 
 - 위와 동일하게 실행
 - 단, **파일 확장자는 `.csv`**
 - 코드북(`welcome_*_codebook.csv` 등)이 있다면 함께 복사해야 함
-
+- 코드내 해당 파일을 명시하기. (insert_1st.py , insert_2nd.py)
 ---
 
 ### 2️⃣ 데이터 삽입 코드 수정
