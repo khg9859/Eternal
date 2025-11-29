@@ -103,36 +103,46 @@ Eternal/
 ├── src/                     # React 프론트엔드 소스
 │   ├── components/          # UI 컴포넌트
 │   │   ├── AIChatInterface.js
-│   │   ├── AdvancedChart.js
-│   │   ├── ChatInterface.js
+│   │   ├── AISummary.js
+│   │   ├── ChartSection.js
+│   │   ├── DashboardHeader.js
 │   │   ├── DataTable.js
-│   │   ├── DataVisualization.js
-│   │   ├── DeviceMockup.js
-│   │   ├── FilterPanel.js
-│   │   ├── HeroSection.js
 │   │   ├── Logo.js
-│   │   ├── SearchBox.js
-│   │   ├── SearchResults.js
-│   │   ├── SearchTags.js
-│   │   └── SmartChart.js
+│   │   ├── QuickStats.js
+│   │   └── SidePanel.js
+│   ├── pages/               # 페이지 컴포넌트
+│   │   ├── HomePage.js
+│   │   └── ResultsPage.js
 │   ├── App.js               # 메인 앱 컴포넌트
 │   ├── index.js             # 진입점
 │   └── index.css            # 전역 스타일
 │
 ├── public/                  # 정적 파일
+│   ├── bg.mp4
+│   ├── bg1.mp4
 │   └── index.html
 │
-├── build/                   # 프로덕션 빌드
-│   └── static/
-│
 ├── images/                  # 프로젝트 이미지
-│   └── 리드미.png
+│   ├── chatbot.png
+│   ├── main.png
+│   ├── result1.png
+│   └── result2.png
+│
+├── search/                  # 검색 및 RAG 관련 파이썬 모듈
+│   ├── ai_summary.py
+│   ├── makeSQL.py
+│   ├── parsing.py
+│   └── rag_pipeline.py
 │
 ├── main.py                  # FastAPI 백엔드 서버
-├── LLMlangchan.py          # LLM RAG 파이프라인
+├── LLMlangchan.py           # LLM RAG 파이프라인 (main.py에서 사용)
 ├── requirements.txt         # Python 의존성
 ├── package.json             # Node.js 의존성
-├── tailwind.config.js       # Tailwind 설정
+├── tailwind.config.js       # Tailwind CSS 설정
+├── postcss.config.js        # PostCSS 설정
+├── Dockerfile               # Docker 이미지 빌드 설정
+├── docker-compose.yml       # Docker 컨테이너 오케스트레이션
+├── LICENSE                  # 라이선스
 └── README.md
 ```
 
