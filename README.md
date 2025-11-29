@@ -19,6 +19,7 @@
 ![AI 요약 분석 결과](images/결과1.png)
 
 **주요 특징:**
+
 - **자연어 질의**: 일상 언어로 데이터 검색 가능
 - **AI 요약 분석**: 검색 결과에 대한 간결한 인사이트 제공
 - **실시간 검색**: 백엔드 API와 연동하여 즉시 결과 반환
@@ -30,6 +31,7 @@
 ![데이터 시각화](images/결과2.png)
 
 **제공하는 차트:**
+
 - **퀵 차트**: 주요 통계를 한눈에 확인
 - **나이대별 통계 분포**: 막대 차트로 연령대별 응답 현황 표시
 - **지역별 응답 비중**: 원형 차트로 지역별 분포 시각화
@@ -47,6 +49,7 @@
 ![AI 챗봇](images/chatbot.png)
 
 **주요 특징:**
+
 - **데이터 기반 대화형 응답**: 패널 데이터를 기반으로 짧고 명확하게 요약하여 대답
 - **후속 질문 지원**: 이전 대화 맥락을 유지하여 연속적인 질문 가능
 - **스몰톡 처리**: 데이터와 관련 없는 일반 질문은 smalltalk_chat으로 자연스럽게 응대
@@ -65,7 +68,7 @@
 | **Backend**  | <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white"/> <img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white"/> <img src="https://img.shields.io/badge/LangChain-121212?logo=chainlink&logoColor=white"/>       |
 | **Database** | <img src="https://img.shields.io/badge/PostgreSQL-336791?logo=postgresql&logoColor=white"/> <img src="https://img.shields.io/badge/pgvector-336791?logo=postgresql&logoColor=white"/>                                                                                     |
 | **Infra**    | <img src="https://img.shields.io/badge/AWS-232F3E?logo=amazonaws&logoColor=white"/> <img src="https://img.shields.io/badge/EC2-FF9900?logo=amazonec2&logoColor=white"/>                                                                                                   |
-| **LLM**      | <img src="https://img.shields.io/badge/OpenAI-412991?logo=openai&logoColor=white"/> <img src="https://img.shields.io/badge/RAG-FF6B6B?style=flat&logoColor=white"/> <img src="https://img.shields.io/badge/Prompt_Engineering-4A90E2?style=flat&logoColor=white"/>                                                                                                                                                                                                                                    |
+| **LLM**      | <img src="https://img.shields.io/badge/OpenAI-412991?logo=openai&logoColor=white"/> <img src="https://img.shields.io/badge/RAG-FF6B6B?style=flat&logoColor=white"/> <img src="https://img.shields.io/badge/Prompt_Engineering-4A90E2?style=flat&logoColor=white"/>        |
 
 ---
 
@@ -137,13 +140,13 @@ Eternal/
 
 ## 팀 역할
 
-| 이름     | 역할            | 주요 담당                                                                     |
-| -------- | --------------- | ----------------------------------------------------------------------------- |
-| **홍근** | 팀장 / PM       | 일정 관리 · 주간 보고서 취합 · GitHub 관리 · 발표/브리핑 · 팀원 코드 리뷰 |
-| **용주** | 프론트엔드      | React + Tailwind UI 제작 · 시각화 · UX 최적화            |
-| **정원** | 데이터 엔지니어 | 데이터 전처리 · 스키마 설계 · 임베딩 · PostgreSQL        |
-| **민석** | LLM 엔지니어    | LLM API 연동 · 프롬프트 설계 · RAG/Eval 관리             |
-| **범창** | 백엔드          | FastAPI 서버 · DB 연동 · AWS 배포                        |
+| 이름       | 역할            | 주요 담당                                                                 |
+| ---------- | --------------- | ------------------------------------------------------------------------- |
+| **김홍근** | 팀장 / PM       | 일정 관리 · 주간 보고서 취합 · GitHub 관리 · 발표/브리핑 · 팀원 코드 리뷰 |
+| **최용주** | 프론트엔드      | React + Tailwind UI 제작 · 시각화 · UX 최적화                             |
+| **서정원** | 데이터 엔지니어 | 데이터 전처리 · 스키마 설계 · 임베딩 · PostgreSQL                         |
+| **김민석** | LLM 엔지니어    | LLM API 연동 · 프롬프트 설계 · RAG/Eval 관리                              |
+| **고범창** | 백엔드          | FastAPI 서버 · DB 연동 · AWS 배포                                         |
 
 ---
 
