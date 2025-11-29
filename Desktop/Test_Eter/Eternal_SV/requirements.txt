@@ -1,8 +1,6 @@
-
 --extra-index-url https://download.pytorch.org/whl/cpu
-
-numpy==1.26.4
-torch==2.2.2+cpu
+numpy
+torch==2.9.1+cpu
 sentence-transformers==3.3.1
 fastapi
 uvicorn
@@ -12,3 +10,4 @@ langchain-openai
 pgvector
 sqlalchemy
 python-dotenv
+

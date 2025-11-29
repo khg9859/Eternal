@@ -22,7 +22,7 @@ from search.rag_pipeline import rag_search_pipeline
 # ai_summary import 시도
 try:
     import sys
-    ai_summary_path = os.path.join(os.path.dirname(__file__), '..', 'Eternal_DT', 'Eternal', 'Data', 'search')
+    ai_summary_path = os.path.join(os.path.dirname(__file__), 'search')
     sys.path.append(ai_summary_path)
     from ai_summary import summarize_agg_results
     print(f"[INFO] ai_summary 모듈 로드 성공: {ai_summary_path}")
