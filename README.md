@@ -12,16 +12,29 @@
 
 ## 주요 기능
 
-### 1. 자연어 기반 스마트 검색
+### 1. 자연어 기반 스마트 검색 및 AI 요약 분석
 
-사용자는 "체력 관리", "결혼 상태" 등 일상적인 언어로 질문하면, AI가 관련 패널 데이터를 자동으로 검색하여 결과를 제공합니다.
+사용자는 "체력 관리", "결혼 상태" 등 일상적인 언어로 질문하면, AI가 관련 패널 데이터를 자동으로 검색하고 요약 분석 결과를 제공합니다.
+
+![AI 요약 분석 결과](images/결과1.png)
+
+**주요 특징:**
+- **자연어 질의**: 일상 언어로 데이터 검색 가능
+- **AI 요약 분석**: 검색 결과에 대한 간결한 인사이트 제공
+- **실시간 검색**: 백엔드 API와 연동하여 즉시 결과 반환
 
 ### 2. 다양한 데이터 시각화
 
-- **기본 차트**: 검색 결과를 막대, 선형, 파이 차트로 시각화
-- **고급 차트**: 여러 차트를 동시에 표시하거나 개별 선택 가능
-- **데이터 테이블**: 정렬, 페이지네이션, 통계 요약 기능 제공
-- **상세 결과**: 검색 결과의 세부 정보 확인
+검색 결과를 다양한 형태의 차트와 테이블로 시각화하여 직관적인 데이터 분석을 지원합니다.
+
+![데이터 시각화](images/결과2.png)
+
+**제공하는 차트:**
+- **퀵 차트**: 주요 통계를 한눈에 확인
+- **나이대별 통계 분포**: 막대 차트로 연령대별 응답 현황 표시
+- **지역별 응답 비중**: 원형 차트로 지역별 분포 시각화
+- **데이터 테이블**: 실제 이용자 데이터를 정렬, 페이지네이션하여 제공
+- **응답 순위 및 성별 응답률**: 상세 통계 정보 제공
 
 ### 3. 스마트 필터링
 
@@ -52,7 +65,7 @@
 | **Backend**  | <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white"/> <img src="https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white"/> <img src="https://img.shields.io/badge/LangChain-121212?logo=chainlink&logoColor=white"/>       |
 | **Database** | <img src="https://img.shields.io/badge/PostgreSQL-336791?logo=postgresql&logoColor=white"/> <img src="https://img.shields.io/badge/pgvector-336791?logo=postgresql&logoColor=white"/>                                                                                     |
 | **Infra**    | <img src="https://img.shields.io/badge/AWS-232F3E?logo=amazonaws&logoColor=white"/> <img src="https://img.shields.io/badge/EC2-FF9900?logo=amazonec2&logoColor=white"/>                                                                                                   |
-| **LLM**      | OpenAI API · 프롬프트 엔지니어링 · RAG                                                                                                                                                                                                                                    |
+| **LLM**      | <img src="https://img.shields.io/badge/OpenAI-412991?logo=openai&logoColor=white"/> <img src="https://img.shields.io/badge/RAG-FF6B6B?style=flat&logoColor=white"/> <img src="https://img.shields.io/badge/Prompt_Engineering-4A90E2?style=flat&logoColor=white"/>                                                                                                                                                                                                                                    |
 
 ---
 
