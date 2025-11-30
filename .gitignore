@@ -16,3 +16,16 @@ node_modules/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Environment files
+.env
+
+# Build outputs
+build/
+dist/
+
+# Large media files
+*.mp4
+*.mov
+*.avi
+public/bg*.mp4
